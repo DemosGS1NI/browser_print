@@ -24,6 +24,7 @@
 	};
 
 	type PageSize = '4x6' | '4x4' | '3x3';
+	type TransportFilter = 'bluetooth' | 'usb' | 'lan';
 
 	type BrowserPrintApi = {
 		getDefaultDevice: (
@@ -59,6 +60,7 @@
 	let selectedUid = $state('');
 	let selectedPrinter = $state<BrowserPrintDevice | null>(null);
 	let pageSize = $state<PageSize>('4x6');
+	let transportFilter = $state<TransportFilter>('bluetooth');
 	let statusQueryRunning = $state(false);
 	let decodedStatus = $state<ZebraPrinterStatus | null>(null);
 
@@ -68,6 +70,12 @@
 		{ value: '4x6', label: '4x6 Logistic Label (GS1-128)' },
 		{ value: '4x4', label: '4x4 Case Label (GTIN-14)' },
 		{ value: '3x3', label: '3x3 GS1 Digital Link QR' }
+	];
+
+	const TRANSPORT_OPTIONS: { value: TransportFilter; label: string }[] = [
+		{ value: 'bluetooth', label: 'Bluetooth' },
+		{ value: 'usb', label: 'USB' },
+		{ value: 'lan', label: 'LAN' }
 	];
 
 	const SIZE_DOTS: Record<PageSize, { pw: number; ll: number }> = {
@@ -146,6 +154,20 @@
 
 	function normalizeConnection(device: BrowserPrintDevice): string {
 		return (device.connection ?? '').toLowerCase();
+	}
+
+	function matchesTransportFilter(device: BrowserPrintDevice): boolean {
+		const connection = normalizeConnection(device);
+
+		if (transportFilter === 'bluetooth') {
+			return connection.includes('bluetooth') || connection === 'bt';
+		}
+
+		if (transportFilter === 'usb') {
+			return connection.includes('usb');
+		}
+
+		return connection.includes('network') || connection.includes('tcp') || connection.includes('lan');
 	}
 
 	function pickInitialPrinter(deviceList: BrowserPrintDevice[]) {
@@ -366,14 +388,11 @@
 				return true;
 			});
 
-			const bluetoothOnly = uniqueByUid.filter((device) => {
-				const connection = normalizeConnection(device);
-				return connection.includes('bluetooth') || connection === 'bt';
-			});
+			const filteredDevices = uniqueByUid.filter((device) => matchesTransportFilter(device));
 
-			printers = bluetoothOnly;
+			printers = filteredDevices;
 
-			const initial = pickInitialPrinter(bluetoothOnly);
+			const initial = pickInitialPrinter(filteredDevices);
 			if (initial) {
 				selectedUid = initial.uid;
 				syncSelectedPrinter();
@@ -381,8 +400,7 @@
 			} else {
 				selectedUid = '';
 				selectedPrinter = null;
-				statusMessage =
-					'No Bluetooth Zebra printer found. Confirm the Browser Print Android app can see your QLn420.';
+				statusMessage = `No ${transportFilter.toUpperCase()} Zebra printer found. Confirm Browser Print can see the device.`;
 			}
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
@@ -402,6 +420,14 @@
 			printerStatus = 'Status not queried yet.';
 			decodedStatus = null;
 		}
+	}
+
+	function onTransportChange() {
+		selectedUid = '';
+		selectedPrinter = null;
+		decodedStatus = null;
+		printerStatus = 'Status not queried yet.';
+		void discoverBluetoothPrinters();
 	}
 
 	function queryPrinterStatus() {
@@ -519,7 +545,14 @@
 	</p>
 
 	<div class="panel">
-		<label for="printer">Bluetooth printer</label>
+		<label for="transport">Connection type</label>
+		<select id="transport" bind:value={transportFilter} onchange={onTransportChange} disabled={loading}>
+			{#each TRANSPORT_OPTIONS as option (option.value)}
+				<option value={option.value}>{option.label}</option>
+			{/each}
+		</select>
+
+		<label for="printer">Available printer</label>
 		<select id="printer" bind:value={selectedUid} onchange={onPrinterChange} disabled={loading || printers.length === 0}>
 			<option value="">Select printer</option>
 			{#each printers as printer (printer.uid)}
