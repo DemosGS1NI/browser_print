@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import browserPrintUrl from '../../../zebra-browser-print-js-v31250/BrowserPrint-3.1.250.min.js?url';
-	import zebraLibraryUrl from '../../../zebra-browser-print-js-v31250/BrowserPrint-Zebra-1.1.250.min.js?url';
 
 	type BrowserPrintDevice = {
 		name: string;
@@ -10,17 +9,6 @@
 		deviceType?: string;
 		send: (data: string, onSuccess?: (response?: unknown) => void, onError?: (error: unknown) => void) => void;
 		read?: (onSuccess?: (response?: unknown) => void, onError?: (error: unknown) => void) => void;
-	};
-
-	type ZebraPrinterStatus = {
-		offline?: boolean;
-		paperOut?: boolean;
-		paused?: boolean;
-		headOpen?: boolean;
-		ribbonOut?: boolean;
-		isPrinterReady?: () => boolean;
-		getMessage?: () => string;
-		raw?: string;
 	};
 
 	type PageSize = '4x6' | '4x4' | '3x3';
@@ -39,32 +27,21 @@
 		) => void;
 	};
 
-	type ZebraApi = {
-		Printer: (new (device: BrowserPrintDevice) => {
-			getStatus: (onSuccess: (status: ZebraPrinterStatus) => void, onError?: (error: unknown) => void) => void;
-		}) & {
-			Status?: new (raw: string) => ZebraPrinterStatus;
-		};
-	};
-
 	type WindowWithZebra = Window & {
 		BrowserPrint?: BrowserPrintApi;
-		Zebra?: ZebraApi;
 	};
 
 	let browserPrintReady = $state(false);
 	let loading = $state(true);
 	let statusMessage = $state('Loading BrowserPrint library...');
-	let printerStatus = $state('Status not queried yet.');
 	let printers = $state<BrowserPrintDevice[]>([]);
 	let selectedUid = $state('');
 	let selectedPrinter = $state<BrowserPrintDevice | null>(null);
 	let pageSize = $state<PageSize>('4x6');
 	let transportFilter = $state<TransportFilter>('bluetooth');
-	let statusQueryRunning = $state(false);
-	let decodedStatus = $state<ZebraPrinterStatus | null>(null);
-
-	const STATUS_TIMEOUT_MS = 8000;
+	let previewImageUrl = $state('');
+	let previewLoading = $state(false);
+	let previewError = $state('');
 
 	const PAGE_SIZE_OPTIONS: { value: PageSize; label: string }[] = [
 		{ value: '4x6', label: '4x6 Logistic Label (GS1-128)' },
@@ -111,7 +88,6 @@
 		try {
 			const win = window as WindowWithZebra;
 			await loadScript(browserPrintUrl);
-			await loadScript(zebraLibraryUrl);
 			if (!win.BrowserPrint) {
 				throw new Error('BrowserPrint loaded but did not initialize.');
 			}
@@ -183,6 +159,28 @@
 		selectedPrinter = printers.find((printer) => printer.uid === selectedUid) ?? null;
 	}
 
+	function getActiveSelectedPrinter(): BrowserPrintDevice | null {
+		if (!selectedUid) {
+			selectedPrinter = null;
+			return null;
+		}
+
+		const liveMatch = printers.find((printer) => printer.uid === selectedUid);
+		if (liveMatch) {
+			selectedPrinter = liveMatch;
+			return liveMatch;
+		}
+
+		return selectedPrinter;
+	}
+
+	function handleTransportFailure(message: string, context: string) {
+		const hint = looksLikeOfflineTransportError(message)
+			? '. Connection appears offline. Reconnect in Zebra Browser Print and tap Refresh printers.'
+			: '';
+		statusMessage = `${context}: ${message}${hint}`;
+	}
+
 	function getYYMMDD(offsetDays = 0): string {
 		const date = new Date(Date.now() + offsetDays * 24 * 60 * 60 * 1000);
 		const year = String(date.getFullYear()).slice(-2);
@@ -196,9 +194,13 @@
 		return [
 			'^XA',
 			'^CI28',
+			'^PON',
 			`^PW${SIZE_DOTS['4x6'].pw}`,
 			`^LL${SIZE_DOTS['4x6'].ll}`,
+			'^MNY',
 			'^LH0,0',
+			'^LT0',
+			'^LS0',
 			'^CF0,32',
 			'^FO30,30^FDFROM:^FS',
 			'^CF0,28',
@@ -219,6 +221,9 @@
 			'^FO30,635^FD(01) 09501101530003 (17) EXP (10) LOT123^FS',
 			'^FO30,680^FDCarrier: DEMO FREIGHT  Service: GROUND^FS',
 			'^FO30,715^FDRef: SO-104287  Carton: 1/1^FS',
+			'^FO30,1125^GB750,2,2^FS',
+			'^CF0,22',
+			'^FO30,1140^FD4x6 LENGTH CHECK MARKER^FS',
 			'^XZ'
 		].join('');
 	}
@@ -229,6 +234,7 @@
 		return [
 			'^XA',
 			'^CI28',
+			'^PON',
 			`^PW${SIZE_DOTS['4x4'].pw}`,
 			`^LL${SIZE_DOTS['4x4'].ll}`,
 			'^LH0,0',
@@ -250,25 +256,64 @@
 	}
 
 	function buildDigitalLinkLabel3x3(): string {
-		const serial = 'SN-00004567';
-		const lot = 'LOT-DL-2201';
-		const url = `https://id.demo.example/01/09501101530003/21/${serial}/10/${lot}`;
+		const gtin = '07433200758007';
+		const lot = '123ABC';
+		const packingDate = '260530';
+		const url = `https://id.2dgs1ni.com/01/${gtin}/11/${packingDate}/10/${lot}`;
 		return [
 			'^XA',
 			'^CI28',
+			'^PON',
+			'^MMT',
+			'^MNY',
+			'^MTD',
+			'^LH0,0',
+			'^LT0',
+			'^LS0',
 			`^PW${SIZE_DOTS['3x3'].pw}`,
 			`^LL${SIZE_DOTS['3x3'].ll}`,
-			'^LH0,0',
-			'^CF0,34',
-			'^FO24,22^FDGS1 DIGITAL LINK DEMO^FS',
-			'^CF0,24',
-			'^FO24,66^FDGTIN: 09501101530003^FS',
-			`^FO24,98^FDLOT: ${lot}^FS`,
-			`^FO24,128^FDSERIAL: ${serial}^FS`,
-			'^FO130,165^BQN,2,7',
+			'^FO0,24^A0N,40,40^FB609,1,0,C,0^FDCOMPANIA DEMO^FS',
+			'^FO0,68^A0N,22,22^FB609,1,0,C,0^FDINNOVACION  CALIDAD  CONFIANZA^FS',
+			'^FO20,96^CF0,28^FDPRODUCTO^FS',
+			'^FO20,128^CF0,22^FDBarra Nutritiva Trigo / Avena^FS',
+			'^FO20,155^CF0,22^FD45 gramos^FS',
+			'^FO20,190^GB288,2,2^FS',
+			'^FO20,212^CF0,28^FDGTIN^FS',
+			`^FO20,244^CF0,40^FD${gtin}^FS`,
+			'^FO20,292^GB288,2,2^FS',
+			'^FO20,306^CF0,28^FDFECHA EMPAQUE^FS',
+			`^FO20,338^CF0,40^FD${packingDate}^FS`,
+			'^FO20,386^GB288,2,2^FS',
+			'^FO20,406^CF0,28^FDLOTE^FS',
+			`^FO20,438^CF0,40^FD${lot}^FS`,
+			'^FO352,178^BQN,2,8',
 			`^FDLA,${url}^FS`,
-			'^CF0,20',
-			'^FO24,540^FDScan QR for GS1 Digital Link data^FS',
+			'^FO322,500^A0N,30,30^FD(01) 07433200758007^FS',
+			'^FO20,555^CF0,18^FDEsta etiqueta usa GS1 Digital Link para conectar producto e informacion.^FS',
+			'^PQ1,0,1,N',
+			'^XZ'
+		].join('');
+	}
+
+	function buildCalibrationLabel3x3(): string {
+		return [
+			'^XA',
+			'^CI28',
+			'^PON',
+			'^MMT',
+			'^XB',
+			`^PW${SIZE_DOTS['3x3'].pw}`,
+			`^LL${SIZE_DOTS['3x3'].ll}`,
+			'^MNY',
+			'^LH0,0',
+			'^LT0',
+			'^LS0',
+			'^FO0,0^GB609,609,3^FS',
+			'^FO18,18^GB573,573,1^FS',
+			'^FO0,0^GB120,120,3^FS',
+			'^FO24,24^CF0,26^FD3x3 CAL TEST^FS',
+			'^FO24,60^CF0,20^FDTop-left anchor^FS',
+			'^FO24,565^CF0,20^FDBottom edge marker^FS',
 			'^XZ'
 		].join('');
 	}
@@ -285,17 +330,45 @@
 		return buildLogisticsLabel4x6();
 	}
 
-	function formatStatusFromZebra(status: ZebraPrinterStatus): string {
-		const rawPieces: string[] = [];
-		if (status.offline) rawPieces.push('offline');
-		if (status.paperOut) rawPieces.push('paper out');
-		if (status.headOpen) rawPieces.push('head open');
-		if (status.paused) rawPieces.push('paused');
-		if (status.ribbonOut) rawPieces.push('ribbon out');
+	function getPreviewQrUrl(): string | null {
+		if (pageSize !== '3x3') return null;
+		return 'https://id.2dgs1ni.com/01/07433200758007/11/260530/10/123ABC';
+	}
 
-		const primary = status.getMessage ? status.getMessage() : rawPieces.length > 0 ? rawPieces.join(', ') : 'Ready';
-		const details = rawPieces.length > 0 ? ` (${rawPieces.join(', ')})` : '';
-		return `${primary}${details}`;
+	async function renderAccuratePreview3x3() {
+		if (pageSize !== '3x3') {
+			return;
+		}
+
+		previewLoading = true;
+		previewError = '';
+
+		const zpl = buildDigitalLinkLabel3x3();
+		const previousObjectUrl = previewImageUrl;
+
+		try {
+			const response = await fetch('https://api.labelary.com/v1/printers/8dpmm/labels/3x3/0/', {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/x-www-form-urlencoded'
+				},
+				body: zpl
+			});
+
+			if (!response.ok) {
+				throw new Error(`Preview render failed (${response.status})`);
+			}
+
+			const blob = await response.blob();
+			previewImageUrl = URL.createObjectURL(blob);
+			if (previousObjectUrl) {
+				URL.revokeObjectURL(previousObjectUrl);
+			}
+		} catch (error) {
+			previewError = error instanceof Error ? error.message : String(error);
+		} finally {
+			previewLoading = false;
+		}
 	}
 
 	function toErrorMessage(error: unknown): string {
@@ -312,57 +385,6 @@
 			text.includes('unreachable') ||
 			text.includes('connection')
 		);
-	}
-
-	function setDecodedOffline(reason = 'Offline or unreachable'): void {
-		decodedStatus = {
-			offline: true,
-			paperOut: false,
-			headOpen: false,
-			paused: false,
-			ribbonOut: false,
-			isPrinterReady: () => false,
-			getMessage: () => reason
-		};
-	}
-
-	function readyFlag(): 'ok' | 'bad' | 'unknown' {
-		if (!decodedStatus) return 'unknown';
-		return decodedStatus.isPrinterReady?.() ? 'ok' : 'bad';
-	}
-
-	function problemFlag(problem: boolean | undefined): 'ok' | 'bad' | 'unknown' {
-		if (!decodedStatus || problem === undefined) return 'unknown';
-		return problem ? 'bad' : 'ok';
-	}
-
-	function parseRawHsStatus(rawText: string): string {
-		const raw = rawText.trim();
-		if (!raw) {
-			decodedStatus = null;
-			return 'Empty response from printer.';
-		}
-
-		const win = window as WindowWithZebra;
-		const statusCtor = win.Zebra?.Printer?.Status;
-		if (statusCtor) {
-			try {
-				const parsed = new statusCtor(raw);
-				decodedStatus = parsed;
-				const human = formatStatusFromZebra(parsed);
-				return `${human} | Raw ~HS: ${raw}`;
-			} catch {
-				// Fall through to generic fallback parser below.
-			}
-		}
-
-		decodedStatus = null;
-		const parts = raw.split(',');
-		if (parts.length < 2) {
-			return `Raw status: ${raw}`;
-		}
-
-		return `Raw ~HS has ${parts.length} fields. Raw: ${raw}`;
 	}
 
 	async function discoverBluetoothPrinters() {
@@ -417,103 +439,33 @@
 		syncSelectedPrinter();
 		if (selectedPrinter) {
 			statusMessage = `Selected printer: ${selectedPrinter.name}`;
-			printerStatus = 'Status not queried yet.';
-			decodedStatus = null;
 		}
 	}
 
 	function onTransportChange() {
 		selectedUid = '';
 		selectedPrinter = null;
-		decodedStatus = null;
-		printerStatus = 'Status not queried yet.';
 		void discoverBluetoothPrinters();
 	}
 
-	function queryPrinterStatus() {
-		if (!selectedPrinter) {
-			statusMessage = 'Select a Bluetooth printer first.';
-			return;
+	function onPageSizeChange() {
+		if (pageSize === '3x3') {
+			void renderAccuratePreview3x3();
 		}
-
-		if (statusQueryRunning) {
-			statusMessage = 'Status query already in progress. Please wait.';
-			return;
-		}
-
-		const activePrinter = selectedPrinter;
-		if (!activePrinter.read) {
-			decodedStatus = null;
-			printerStatus = 'Status query not supported by this device API.';
-			statusMessage = 'Cannot query status on this client.';
-			return;
-		}
-
-		statusQueryRunning = true;
-		loading = true;
-		statusMessage = `Querying status from ${activePrinter.name} (timeout ${STATUS_TIMEOUT_MS / 1000}s)...`;
-
-		let completed = false;
-		const finish = (nextPrinterStatus: string, nextStatusMessage: string) => {
-			if (completed) return;
-			completed = true;
-			clearTimeout(timeoutId);
-			printerStatus = nextPrinterStatus;
-			statusMessage = nextStatusMessage;
-			loading = false;
-			statusQueryRunning = false;
-		};
-
-		const timeoutId = setTimeout(() => {
-			setDecodedOffline('No response from printer');
-			finish(
-				`Status query timeout after ${STATUS_TIMEOUT_MS / 1000}s.`,
-				'Status query timed out. Printer may be busy or not responding.'
-			);
-		}, STATUS_TIMEOUT_MS);
-
-		activePrinter.send(
-			'~HS',
-			() => {
-				activePrinter.read?.(
-					(response) => {
-						const raw = String(response ?? '');
-						finish(parseRawHsStatus(raw), `Status received from ${activePrinter.name}.`);
-					},
-					(error) => {
-						const message = toErrorMessage(error);
-						if (looksLikeOfflineTransportError(message)) {
-							setDecodedOffline('Offline or unreachable');
-						} else {
-							decodedStatus = null;
-						}
-						finish(`Status read failed: ${message}`, 'Printer status read failed.');
-					}
-				);
-			},
-			(error) => {
-				const message = toErrorMessage(error);
-				if (looksLikeOfflineTransportError(message)) {
-					setDecodedOffline('Offline or unreachable');
-				} else {
-					decodedStatus = null;
-				}
-				finish(`Status send failed: ${message}`, 'Printer status request failed.');
-			}
-		);
 	}
 
 	function printTestLabel() {
-		if (!selectedPrinter) {
-			statusMessage = 'Select a Bluetooth printer first.';
+		const activePrinter = getActiveSelectedPrinter();
+		if (!activePrinter) {
+			statusMessage = 'Select a printer first.';
 			return;
 		}
 
 		loading = true;
-		statusMessage = `Sending ${pageSize} demo label to ${selectedPrinter.name}...`;
+		statusMessage = `Sending ${pageSize} demo label to ${activePrinter.name}...`;
 		const labelZpl = buildDemoLabel();
 
-		selectedPrinter.send(
+		activePrinter.send(
 			labelZpl,
 			() => {
 				loading = false;
@@ -522,26 +474,133 @@
 			},
 			(error) => {
 				loading = false;
-				const message = error instanceof Error ? error.message : String(error);
-				statusMessage = `Print failed: ${message}`;
+				const message = toErrorMessage(error);
+				handleTransportFailure(message, 'Print failed');
+			}
+		);
+	}
+
+	function printCalibrationPattern3x3() {
+		const activePrinter = getActiveSelectedPrinter();
+		if (!activePrinter) {
+			statusMessage = 'Select a printer first.';
+			return;
+		}
+
+		loading = true;
+		statusMessage = `Sending 3x3 calibration pattern to ${activePrinter.name}...`;
+		const labelZpl = buildCalibrationLabel3x3();
+
+		activePrinter.send(
+			labelZpl,
+			() => {
+				loading = false;
+				statusMessage =
+					'Calibration label sent. Check whether the next ready label is used and whether borders are fully visible.';
+			},
+			(error) => {
+				loading = false;
+				const message = toErrorMessage(error);
+				handleTransportFailure(message, 'Calibration print failed');
+			}
+		);
+	}
+
+	function sendRawCommand(command: string, successMessage: string, errorPrefix: string) {
+		const activePrinter = getActiveSelectedPrinter();
+		if (!activePrinter) {
+			statusMessage = 'Select a printer first.';
+			return;
+		}
+
+		loading = true;
+		activePrinter.send(
+			command,
+			() => {
+				loading = false;
+				statusMessage = successMessage;
+			},
+			(error) => {
+				loading = false;
+				const message = toErrorMessage(error);
+				handleTransportFailure(message, errorPrefix);
+			}
+		);
+	}
+
+	function runMediaCalibration() {
+		sendRawCommand(
+			'~JC',
+			'Media calibration command sent (~JC). Printer may feed labels while calibrating.',
+			'Calibration command failed'
+		);
+	}
+
+	function printSafeMode3x3() {
+		const activePrinter = getActiveSelectedPrinter();
+		if (!activePrinter) {
+			statusMessage = 'Select a printer first.';
+			return;
+		}
+
+		loading = true;
+		statusMessage = `Sending 3x3 safe-mode test to ${activePrinter.name}...`;
+		const safeZpl = [
+			'^XA',
+			'^CI28',
+			'^PON',
+			'^MMT',
+			'^MNY',
+			'^MTD',
+			'^LH0,0',
+			'^LT0',
+			'^LS0',
+			`^PW${SIZE_DOTS['3x3'].pw}`,
+			`^LL${SIZE_DOTS['3x3'].ll}`,
+			'^FO0,0^GB609,609,3^FS',
+			'^FO24,24^CF0,26^FD3x3 SAFE MODE^FS',
+			'^FO24,60^CF0,20^FDNo ^XB. Gap sensing. DT.^FS',
+			'^FO24,565^CF0,20^FDEnd marker^FS',
+			'^PQ1,0,1,N',
+			'^XZ'
+		].join('');
+
+		activePrinter.send(
+			safeZpl,
+			() => {
+				loading = false;
+				statusMessage =
+					'Safe-mode label sent. If first label is still blank, printer settings are likely the root cause.';
+			},
+			(error) => {
+				loading = false;
+				const message = toErrorMessage(error);
+				handleTransportFailure(message, 'Safe-mode print failed');
 			}
 		);
 	}
 
 	onMount(() => {
 		void initBrowserPrint();
+		void renderAccuratePreview3x3();
+
+		return () => {
+			if (previewImageUrl) {
+				URL.revokeObjectURL(previewImageUrl);
+			}
+		};
 	});
 </script>
 
 <svelte:head>
-	<title>Zebra Bluetooth Print Test</title>
+	<title>Zebra Web App Print Test</title>
 </svelte:head>
 
 <main class="page">
-	<h1>Zebra QLn420 Bluetooth Print Test</h1>
+	<h1>Zebra Web App Print Test</h1>
 	<p class="help">
 		Use this page in Android Chrome with the Zebra Browser Print app installed. It discovers Bluetooth
-		printers, queries status, and sends GS1 demo labels for selected page sizes.
+		printers and sends GS1 demo labels for selected page sizes.
 	</p>
 
 	<div class="panel">
@@ -561,7 +620,7 @@
 		</select>
 
 		<label for="page-size">Demo label type</label>
-		<select id="page-size" bind:value={pageSize} disabled={loading}>
+		<select id="page-size" bind:value={pageSize} onchange={onPageSizeChange} disabled={loading}>
 			{#each PAGE_SIZE_OPTIONS as option (option.value)}
 				<option value={option.value}>{option.label}</option>
 			{/each}
@@ -571,36 +630,63 @@
 			<button type="button" onclick={discoverBluetoothPrinters} disabled={loading || !browserPrintReady}>
 				Refresh printers
 			</button>
-			<button type="button" onclick={queryPrinterStatus} disabled={loading || !selectedPrinter}>
-				Query printer status
-			</button>
 			<button type="button" onclick={printTestLabel} disabled={loading || !selectedPrinter}>
 				Print selected demo label
 			</button>
 		</div>
 
-		<div class="flags">
-			<span class:ok={readyFlag() === 'ok'} class:bad={readyFlag() === 'bad'} class:unknown={readyFlag() === 'unknown'}>
-				Ready
-			</span>
-			<span class:ok={problemFlag(decodedStatus?.offline) === 'ok'} class:bad={problemFlag(decodedStatus?.offline) === 'bad'} class:unknown={problemFlag(decodedStatus?.offline) === 'unknown'}>
-				Offline
-			</span>
-			<span class:ok={problemFlag(decodedStatus?.paperOut) === 'ok'} class:bad={problemFlag(decodedStatus?.paperOut) === 'bad'} class:unknown={problemFlag(decodedStatus?.paperOut) === 'unknown'}>
-				Paper Out
-			</span>
-			<span class:ok={problemFlag(decodedStatus?.headOpen) === 'ok'} class:bad={problemFlag(decodedStatus?.headOpen) === 'bad'} class:unknown={problemFlag(decodedStatus?.headOpen) === 'unknown'}>
-				Head Open
-			</span>
-			<span class:ok={problemFlag(decodedStatus?.paused) === 'ok'} class:bad={problemFlag(decodedStatus?.paused) === 'bad'} class:unknown={problemFlag(decodedStatus?.paused) === 'unknown'}>
-				Paused
-			</span>
-			<span class:ok={problemFlag(decodedStatus?.ribbonOut) === 'ok'} class:bad={problemFlag(decodedStatus?.ribbonOut) === 'bad'} class:unknown={problemFlag(decodedStatus?.ribbonOut) === 'unknown'}>
-				Ribbon Out
-			</span>
-		</div>
-
-		<p class="status"><strong>Printer status:</strong> {printerStatus}</p>
+		<details class="preview" open>
+			<summary>Print Preview (screen only)</summary>
+			<div class="preview-card">
+				{#if pageSize === '3x3'}
+					{#if previewLoading}
+						<p class="preview-note">Rendering accurate 3x3 preview from ZPL...</p>
+					{:else if previewImageUrl}
+						<img class="preview-image" src={previewImageUrl} alt="Accurate 3x3 preview generated from ZPL" />
+					{:else}
+						<div class="label3x3">
+							<div class="p-company">COMPANIA DEMO</div>
+							<div class="p-tagline">INNOVACION  CALIDAD  CONFIANZA</div>
+							<div class="p-product-label">PRODUCTO</div>
+							<div class="p-product">Barra Nutritiva Trigo / Avena<br />45 gramos</div>
+							<div class="p-divider p-divider-1"></div>
+							<div class="p-gtin-label">GTIN</div>
+							<div class="p-gtin-value">07433200758007</div>
+							<div class="p-divider p-divider-2"></div>
+							<div class="p-pack-label">FECHA EMPAQUE</div>
+							<div class="p-pack-value">260530</div>
+							<div class="p-divider p-divider-3"></div>
+							<div class="p-lot-label">LOTE</div>
+							<div class="p-lot-value">123ABC</div>
+							<div class="p-qr">QR</div>
+							<div class="p-qr-bottom">(01) 07433200758007</div>
+						</div>
+					{/if}
+					{#if previewError}
+						<p class="preview-error">Accurate preview is unavailable right now: {previewError}</p>
+					{/if}
+					<button
+						type="button"
+						onclick={renderAccuratePreview3x3}
+						disabled={previewLoading}
+						class="preview-refresh"
+					>
+						Refresh accurate preview
+					</button>
+					<p class="preview-qr"><strong>QR URL:</strong> {getPreviewQrUrl()}</p>
+				{:else if pageSize === '4x4'}
+					<div class="label-generic">
+						<strong>4x4 Case Label Preview</strong>
+						<p>Product + GTIN-14 + quantity + lot + dates + barcode area</p>
+					</div>
+				{:else}
+					<div class="label-generic">
+						<strong>4x6 Logistics Label Preview</strong>
+						<p>From/To blocks + SSCC + GS1-128 + transport reference area</p>
+					</div>
+				{/if}
+			</div>
+		</details>
 		<p class="status" aria-live="polite">{statusMessage}</p>
 	</div>
 </main>
@@ -650,6 +736,195 @@
 		flex-wrap: wrap;
 	}
 
+	.preview {
+		border: 1px solid #cbd5e1;
+		border-radius: 0.5rem;
+		background: #ffffff;
+	}
+
+	.preview summary {
+		cursor: pointer;
+		font-weight: 600;
+		padding: 0.6rem 0.8rem;
+	}
+
+	.preview-card {
+		padding: 0 0.8rem 0.8rem 0.8rem;
+	}
+
+	.preview-card p {
+		margin: 0.4rem 0;
+	}
+
+	.label3x3 {
+		position: relative;
+		width: min(100%, 420px);
+		aspect-ratio: 1 / 1;
+		background: #fff;
+		border: 1px solid #cbd5e1;
+		border-radius: 0.35rem;
+		overflow: hidden;
+		font-family: Arial, sans-serif;
+	}
+
+	.label3x3 div {
+		position: absolute;
+		line-height: 1.1;
+	}
+
+	.label3x3 .p-company {
+		left: 0;
+		top: 5%;
+		width: 100%;
+		text-align: center;
+		font-size: 1.25rem;
+		font-weight: 700;
+	}
+
+	.label3x3 .p-tagline {
+		left: 0;
+		top: 13%;
+		width: 100%;
+		text-align: center;
+		font-size: 0.62rem;
+		letter-spacing: 0.02em;
+	}
+
+	.label3x3 .p-product {
+		left: 3.5%;
+		top: 25%;
+		width: 50%;
+		font-size: 0.74rem;
+		font-weight: 600;
+	}
+
+	.label3x3 .p-product-label {
+		left: 3.5%;
+		top: 21%;
+		font-size: 0.62rem;
+		font-weight: 700;
+	}
+
+	.label3x3 .p-divider {
+		left: 3.5%;
+		width: 50%;
+		height: 0;
+		border-top: 2px solid #111;
+	}
+
+	.label3x3 .p-divider-1 {
+		top: 36%;
+	}
+
+	.label3x3 .p-divider-2 {
+		top: 52%;
+	}
+
+	.label3x3 .p-divider-3 {
+		top: 68%;
+	}
+
+	.label3x3 .p-gtin-label,
+	.label3x3 .p-pack-label,
+	.label3x3 .p-lot-label {
+		left: 3.5%;
+		font-size: 0.62rem;
+		font-weight: 700;
+	}
+
+	.label3x3 .p-gtin-label {
+		top: 40%;
+	}
+
+	.label3x3 .p-pack-label {
+		top: 56%;
+	}
+
+	.label3x3 .p-lot-label {
+		top: 72%;
+	}
+
+	.label3x3 .p-gtin-value,
+	.label3x3 .p-pack-value,
+	.label3x3 .p-lot-value {
+		left: 3.5%;
+		font-size: 0.86rem;
+		font-weight: 700;
+	}
+
+	.label3x3 .p-gtin-value {
+		top: 45%;
+	}
+
+	.label3x3 .p-pack-value {
+		top: 61%;
+	}
+
+	.label3x3 .p-lot-value {
+		top: 77%;
+	}
+
+	.label3x3 .p-qr {
+		right: 5%;
+		top: 28%;
+		width: 36%;
+		aspect-ratio: 1 / 1;
+		border: 2px solid #111;
+		display: grid;
+		place-items: center;
+		font-size: 0.95rem;
+		font-weight: 700;
+		background:
+			repeating-linear-gradient(0deg, #000 0 3px, #fff 3px 6px),
+			repeating-linear-gradient(90deg, #000 0 3px, #fff 3px 6px);
+		color: #fff;
+		mix-blend-mode: difference;
+	}
+
+	.label3x3 .p-qr-bottom {
+		right: 5%;
+		top: 67%;
+		width: 36%;
+		text-align: center;
+		font-size: 0.8rem;
+		font-weight: 700;
+	}
+
+	.label-generic {
+		border: 1px dashed #94a3b8;
+		border-radius: 0.35rem;
+		padding: 0.8rem;
+		background: #fff;
+	}
+
+	.preview-qr {
+		word-break: break-all;
+		font-size: 0.9rem;
+	}
+
+	.preview-note,
+	.preview-error {
+		margin: 0.4rem 0;
+		font-size: 0.92rem;
+	}
+
+	.preview-error {
+		color: #9f1239;
+	}
+
+	.preview-image {
+		display: block;
+		width: min(100%, 420px);
+		height: auto;
+		border: 1px solid #cbd5e1;
+		border-radius: 0.35rem;
+		background: #fff;
+	}
+
+	.preview-refresh {
+		margin-top: 0.5rem;
+	}
+
 	button {
 		padding: 0.6rem 1rem;
 		border: 1px solid #cbd5e1;
@@ -666,37 +941,5 @@
 	.status {
 		margin: 0;
 		font-size: 0.95rem;
-	}
-
-	.flags {
-		display: flex;
-		gap: 0.5rem;
-		flex-wrap: wrap;
-	}
-
-	.flags span {
-		font-size: 0.8rem;
-		padding: 0.25rem 0.5rem;
-		border-radius: 999px;
-		border: 1px solid #cbd5e1;
-		background: #f1f5f9;
-	}
-
-	.flags span.ok {
-		background: #dcfce7;
-		border-color: #22c55e;
-		color: #166534;
-	}
-
-	.flags span.bad {
-		background: #fee2e2;
-		border-color: #ef4444;
-		color: #991b1b;
-	}
-
-	.flags span.unknown {
-		background: #e2e8f0;
-		border-color: #94a3b8;
-		color: #334155;
 	}
 </style>
