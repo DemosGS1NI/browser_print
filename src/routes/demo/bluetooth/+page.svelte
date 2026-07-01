@@ -1,5 +1,12 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import {
+		buildCalibrationLabel3x3,
+		buildDemoLabel as buildZplDemoLabel,
+		DIGITAL_LINK_QR_URL,
+		SIZE_DOTS,
+		type PageSize
+	} from '$lib/printing/zpl';
 	import browserPrintUrl from '../../../zebra-browser-print-js-v31250/BrowserPrint-3.1.250.min.js?url';
 
 	type BrowserPrintDevice = {
@@ -11,8 +18,8 @@
 		read?: (onSuccess?: (response?: unknown) => void, onError?: (error: unknown) => void) => void;
 	};
 
-	type PageSize = '4x6' | '4x4' | '3x3';
 	type TransportFilter = 'bluetooth' | 'usb' | 'lan';
+	type PrinterBrand = 'zebra' | 'honeywell';
 
 	type BrowserPrintApi = {
 		getDefaultDevice: (
@@ -31,6 +38,14 @@
 		BrowserPrint?: BrowserPrintApi;
 	};
 
+	type LanApiResponse = {
+		ok: boolean;
+		error?: string;
+		bytesSent?: number;
+	};
+
+	const DEFAULT_LAN_PRINTER_IP = '192.168.1.123';
+
 	let browserPrintReady = $state(false);
 	let loading = $state(true);
 	let statusMessage = $state('Loading BrowserPrint library...');
@@ -38,15 +53,25 @@
 	let selectedUid = $state('');
 	let selectedPrinter = $state<BrowserPrintDevice | null>(null);
 	let pageSize = $state<PageSize>('4x6');
+	let printerBrand = $state<PrinterBrand>('zebra');
 	let transportFilter = $state<TransportFilter>('bluetooth');
+	let printerIp = $state(DEFAULT_LAN_PRINTER_IP);
+	let printerPort = $state(9100);
 	let previewImageUrl = $state('');
 	let previewLoading = $state(false);
 	let previewError = $state('');
+	let previewAbortController: AbortController | null = null;
+	let zebraDiscoveryRequestId = 0;
 
 	const PAGE_SIZE_OPTIONS: { value: PageSize; label: string }[] = [
 		{ value: '4x6', label: '4x6 Logistic Label (GS1-128)' },
 		{ value: '4x4', label: '4x4 Case Label (GTIN-14)' },
 		{ value: '3x3', label: '3x3 GS1 Digital Link QR' }
+	];
+
+	const PRINTER_BRAND_OPTIONS: { value: PrinterBrand; label: string }[] = [
+		{ value: 'zebra', label: 'ZEBRA' },
+		{ value: 'honeywell', label: 'HONEYWELL' }
 	];
 
 	const TRANSPORT_OPTIONS: { value: TransportFilter; label: string }[] = [
@@ -55,11 +80,7 @@
 		{ value: 'lan', label: 'LAN' }
 	];
 
-	const SIZE_DOTS: Record<PageSize, { pw: number; ll: number }> = {
-		'4x6': { pw: 812, ll: 1218 },
-		'4x4': { pw: 812, ll: 812 },
-		'3x3': { pw: 609, ll: 609 }
-	};
+	const PRINTER_DISCOVERY_TIMEOUT_MS = 5000;
 
 	function scriptAlreadyLoaded(src: string): boolean {
 		return !!document.querySelector(`script[src="${src}"]`);
@@ -93,11 +114,15 @@
 			}
 
 			browserPrintReady = true;
-			statusMessage = 'BrowserPrint ready. Discovering Bluetooth printers...';
-			await discoverBluetoothPrinters();
+			if (printerBrand === 'zebra') {
+				statusMessage = 'BrowserPrint ready. Discovering Zebra printers...';
+				await discoverZebraPrinters();
+			}
 		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			statusMessage = `Initialization failed: ${message}`;
+			if (printerBrand === 'zebra') {
+				const message = error instanceof Error ? error.message : String(error);
+				statusMessage = `Zebra Browser Print initialization failed: ${message}`;
+			}
 		} finally {
 			loading = false;
 		}
@@ -106,14 +131,24 @@
 	function getDefaultPrinter(): Promise<BrowserPrintDevice | null> {
 		return new Promise((resolve, reject) => {
 			const win = window as WindowWithZebra;
-			win.BrowserPrint?.getDefaultDevice('printer', resolve, reject);
+			if (!win.BrowserPrint) {
+				reject(new Error('BrowserPrint API is not available.'));
+				return;
+			}
+
+			win.BrowserPrint.getDefaultDevice('printer', resolve, reject);
 		});
 	}
 
 	function getLocalPrinters(): Promise<BrowserPrintDevice[]> {
 		return new Promise((resolve, reject) => {
 			const win = window as WindowWithZebra;
-			win.BrowserPrint?.getLocalDevices(
+			if (!win.BrowserPrint) {
+				reject(new Error('BrowserPrint API is not available.'));
+				return;
+			}
+
+			win.BrowserPrint.getLocalDevices(
 				(devices: BrowserPrintDevice[] | Record<string, BrowserPrintDevice[]>) => {
 					if (Array.isArray(devices)) {
 						resolve(devices);
@@ -124,6 +159,26 @@
 				},
 				reject,
 				'printer'
+			);
+		});
+	}
+
+	function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+		return new Promise((resolve, reject) => {
+			const timeoutId = setTimeout(
+				() => reject(new Error(`Printer discovery timed out after ${timeoutMs / 1000} seconds.`)),
+				timeoutMs
+			);
+
+			promise.then(
+				(value) => {
+					clearTimeout(timeoutId);
+					resolve(value);
+				},
+				(error: unknown) => {
+					clearTimeout(timeoutId);
+					reject(error);
+				}
 			);
 		});
 	}
@@ -181,178 +236,34 @@
 		statusMessage = `${context}: ${message}${hint}`;
 	}
 
-	function getYYMMDD(offsetDays = 0): string {
-		const date = new Date(Date.now() + offsetDays * 24 * 60 * 60 * 1000);
-		const year = String(date.getFullYear()).slice(-2);
-		const month = String(date.getMonth() + 1).padStart(2, '0');
-		const day = String(date.getDate()).padStart(2, '0');
-		return `${year}${month}${day}`;
-	}
-
-	function buildLogisticsLabel4x6(): string {
-		const expDate = getYYMMDD(180);
-		return [
-			'^XA',
-			'^CI28',
-			'^PON',
-			`^PW${SIZE_DOTS['4x6'].pw}`,
-			`^LL${SIZE_DOTS['4x6'].ll}`,
-			'^MNY',
-			'^LH0,0',
-			'^LT0',
-			'^LS0',
-			'^CF0,32',
-			'^FO30,30^FDFROM:^FS',
-			'^CF0,28',
-			'^FO30,70^FDNORTHRIDGE FOODS LLC^FS',
-			'^FO30,105^FD2100 WAREHOUSE AVE, DALLAS TX 75201^FS',
-			'^CF0,32',
-			'^FO30,165^FDTO:^FS',
-			'^CF0,28',
-			'^FO30,205^FDPACIFIC RETAIL DC^FS',
-			'^FO30,240^FD950 COMMERCE BLVD, PHOENIX AZ 85043^FS',
-			'^BY3,3,130',
-			'^FO30,310^BCN,130,Y,N,N^FD>;>800012345678901234^FS',
-			'^CF0,26',
-			'^FO30,450^FD(00) 00012345678901234 SSCC^FS',
-			'^BY3,3,120',
-			`^FO30,500^BCN,120,Y,N,N^FD>;>801095011015300017${expDate}10LOT123^FS`,
-			'^CF0,26',
-			'^FO30,635^FD(01) 09501101530003 (17) EXP (10) LOT123^FS',
-			'^FO30,680^FDCarrier: DEMO FREIGHT  Service: GROUND^FS',
-			'^FO30,715^FDRef: SO-104287  Carton: 1/1^FS',
-			'^FO30,1125^GB750,2,2^FS',
-			'^CF0,22',
-			'^FO30,1140^FD4x6 LENGTH CHECK MARKER^FS',
-			'^XZ'
-		].join('');
-	}
-
-	function buildCaseLabel4x4(): string {
-		const packedDate = getYYMMDD(0);
-		const expDate = getYYMMDD(120);
-		return [
-			'^XA',
-			'^CI28',
-			'^PON',
-			`^PW${SIZE_DOTS['4x4'].pw}`,
-			`^LL${SIZE_DOTS['4x4'].ll}`,
-			'^LH0,0',
-			'^CF0,42',
-			'^FO35,30^FDDISTRIBUTION UNIT (CASE)^FS',
-			'^CF0,30',
-			'^FO35,95^FDProduct: PROTEIN BAR - CHOCOLATE^FS',
-			'^FO35,135^FDGTIN-14: 10950110153000^FS',
-			'^FO35,175^FDQuantity: 12 Units^FS',
-			'^FO35,215^FDLot: LOT-CASE-9876^FS',
-			`^FO35,255^FDPack: ${packedDate}   Exp: ${expDate}^FS`,
-			'^BY3,3,170',
-			`^FO35,320^BCN,170,Y,N,N^FD>;>8011095011015300037101210LOT-CASE-987617${expDate}^FS`,
-			'^CF0,28',
-			'^FO35,510^FD(01)10950110153000 (37)12 (10)LOT-CASE-9876^FS',
-			'^FO35,545^FD(17) EXP DATE^FS',
-			'^XZ'
-		].join('');
-	}
-
-	function buildDigitalLinkLabel3x3(): string {
-		const gtin = '07433200758007';
-		const lot = '123ABC';
-		const packingDate = '260530';
-		const url = `https://id.2dgs1ni.com/01/${gtin}/11/${packingDate}/10/${lot}`;
-		return [
-			'^XA',
-			'^CI28',
-			'^PON',
-			'^MMT',
-			'^MNY',
-			'^MTD',
-			'^LH0,0',
-			'^LT0',
-			'^LS0',
-			`^PW${SIZE_DOTS['3x3'].pw}`,
-			`^LL${SIZE_DOTS['3x3'].ll}`,
-			'^FO0,24^A0N,40,40^FB609,1,0,C,0^FDCOMPANIA DEMO^FS',
-			'^FO0,68^A0N,22,22^FB609,1,0,C,0^FDINNOVACION  CALIDAD  CONFIANZA^FS',
-			'^FO20,96^CF0,28^FDPRODUCTO^FS',
-			'^FO20,128^CF0,22^FDBarra Nutritiva Trigo / Avena^FS',
-			'^FO20,155^CF0,22^FD45 gramos^FS',
-			'^FO20,190^GB288,2,2^FS',
-			'^FO20,212^CF0,28^FDGTIN^FS',
-			`^FO20,244^CF0,40^FD${gtin}^FS`,
-			'^FO20,292^GB288,2,2^FS',
-			'^FO20,306^CF0,28^FDFECHA EMPAQUE^FS',
-			`^FO20,338^CF0,40^FD${packingDate}^FS`,
-			'^FO20,386^GB288,2,2^FS',
-			'^FO20,406^CF0,28^FDLOTE^FS',
-			`^FO20,438^CF0,40^FD${lot}^FS`,
-			'^FO352,178^BQN,2,8',
-			`^FDLA,${url}^FS`,
-			'^FO322,500^A0N,30,30^FD(01) 07433200758007^FS',
-			'^FO20,555^CF0,18^FDEsta etiqueta usa GS1 Digital Link para conectar producto e informacion.^FS',
-			'^PQ1,0,1,N',
-			'^XZ'
-		].join('');
-	}
-
-	function buildCalibrationLabel3x3(): string {
-		return [
-			'^XA',
-			'^CI28',
-			'^PON',
-			'^MMT',
-			'^XB',
-			`^PW${SIZE_DOTS['3x3'].pw}`,
-			`^LL${SIZE_DOTS['3x3'].ll}`,
-			'^MNY',
-			'^LH0,0',
-			'^LT0',
-			'^LS0',
-			'^FO0,0^GB609,609,3^FS',
-			'^FO18,18^GB573,573,1^FS',
-			'^FO0,0^GB120,120,3^FS',
-			'^FO24,24^CF0,26^FD3x3 CAL TEST^FS',
-			'^FO24,60^CF0,20^FDTop-left anchor^FS',
-			'^FO24,565^CF0,20^FDBottom edge marker^FS',
-			'^XZ'
-		].join('');
-	}
-
-	function buildDemoLabel(): string {
-		if (pageSize === '4x4') {
-			return buildCaseLabel4x4();
-		}
-
-		if (pageSize === '3x3') {
-			return buildDigitalLinkLabel3x3();
-		}
-
-		return buildLogisticsLabel4x6();
-	}
-
 	function getPreviewQrUrl(): string | null {
 		if (pageSize !== '3x3') return null;
-		return 'https://id.2dgs1ni.com/01/07433200758007/11/260530/10/123ABC';
+		return DIGITAL_LINK_QR_URL;
 	}
 
-	async function renderAccuratePreview3x3() {
-		if (pageSize !== '3x3') {
-			return;
-		}
-
+	async function renderAccuratePreview() {
+		previewAbortController?.abort();
+		const abortController = new AbortController();
+		previewAbortController = abortController;
 		previewLoading = true;
 		previewError = '';
 
-		const zpl = buildDigitalLinkLabel3x3();
-		const previousObjectUrl = previewImageUrl;
+		if (previewImageUrl) {
+			URL.revokeObjectURL(previewImageUrl);
+			previewImageUrl = '';
+		}
+
+		const previewSize = pageSize;
+		const zpl = buildZplDemoLabel(pageSize);
 
 		try {
-			const response = await fetch('https://api.labelary.com/v1/printers/8dpmm/labels/3x3/0/', {
+			const response = await fetch(`https://api.labelary.com/v1/printers/8dpmm/labels/${previewSize}/0/`, {
 				method: 'POST',
 				headers: {
 					'Content-Type': 'application/x-www-form-urlencoded'
 				},
-				body: zpl
+				body: zpl,
+				signal: abortController.signal
 			});
 
 			if (!response.ok) {
@@ -360,14 +271,26 @@
 			}
 
 			const blob = await response.blob();
-			previewImageUrl = URL.createObjectURL(blob);
-			if (previousObjectUrl) {
-				URL.revokeObjectURL(previousObjectUrl);
+			const imageUrl = URL.createObjectURL(blob);
+			if (previewAbortController !== abortController) {
+				URL.revokeObjectURL(imageUrl);
+				return;
 			}
+
+			previewImageUrl = imageUrl;
 		} catch (error) {
-			previewError = error instanceof Error ? error.message : String(error);
+			if (error instanceof Error && error.name === 'AbortError') {
+				return;
+			}
+
+			if (previewAbortController === abortController) {
+				previewError = error instanceof Error ? error.message : String(error);
+			}
 		} finally {
-			previewLoading = false;
+			if (previewAbortController === abortController) {
+				previewLoading = false;
+				previewAbortController = null;
+			}
 		}
 	}
 
@@ -387,7 +310,12 @@
 		);
 	}
 
-	async function discoverBluetoothPrinters() {
+	async function discoverZebraPrinters() {
+		if (printerBrand !== 'zebra' || transportFilter === 'lan') {
+			return;
+		}
+		const requestId = ++zebraDiscoveryRequestId;
+
 		const win = window as WindowWithZebra;
 		if (!win.BrowserPrint) {
 			statusMessage = 'BrowserPrint API is not available.';
@@ -398,7 +326,12 @@
 		statusMessage = 'Searching for printers...';
 
 		try {
-			const [defaultPrinter, localPrinters] = await Promise.all([getDefaultPrinter(), getLocalPrinters()]);
+			const [defaultResult, localResult] = await Promise.allSettled([
+				withTimeout(getDefaultPrinter(), PRINTER_DISCOVERY_TIMEOUT_MS),
+				withTimeout(getLocalPrinters(), PRINTER_DISCOVERY_TIMEOUT_MS)
+			]);
+			const defaultPrinter = defaultResult.status === 'fulfilled' ? defaultResult.value : null;
+			const localPrinters = localResult.status === 'fulfilled' ? localResult.value : [];
 			const merged = [defaultPrinter, ...localPrinters].filter((device): device is BrowserPrintDevice => !!device);
 
 			const seenUids: Record<string, boolean> = {};
@@ -411,6 +344,9 @@
 			});
 
 			const filteredDevices = uniqueByUid.filter((device) => matchesTransportFilter(device));
+			if (printerBrand !== 'zebra' || requestId !== zebraDiscoveryRequestId) {
+				return;
+			}
 
 			printers = filteredDevices;
 
@@ -422,7 +358,7 @@
 			} else {
 				selectedUid = '';
 				selectedPrinter = null;
-				statusMessage = `No ${transportFilter.toUpperCase()} Zebra printer found. Confirm Browser Print can see the device.`;
+				statusMessage = `No ${transportFilter.toUpperCase()} Zebra printer is connected. Label previews remain available.`;
 			}
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
@@ -443,18 +379,83 @@
 	}
 
 	function onTransportChange() {
+		zebraDiscoveryRequestId += 1;
 		selectedUid = '';
 		selectedPrinter = null;
-		void discoverBluetoothPrinters();
-	}
-
-	function onPageSizeChange() {
-		if (pageSize === '3x3') {
-			void renderAccuratePreview3x3();
+		if (printerBrand === 'zebra' && transportFilter !== 'lan') {
+			void discoverZebraPrinters();
+		} else if (transportFilter === 'lan') {
+			statusMessage = 'Enter the LAN printer IP address, then test the connection.';
 		}
 	}
 
-	function printTestLabel() {
+	function onPrinterBrandChange() {
+		zebraDiscoveryRequestId += 1;
+		printers = [];
+		selectedUid = '';
+		selectedPrinter = null;
+
+		if (printerBrand === 'honeywell') {
+			transportFilter = 'lan';
+			loading = false;
+			statusMessage = 'Honeywell selected. Enter its LAN IP address, then test the connection.';
+			return;
+		}
+
+		transportFilter = 'bluetooth';
+		if (browserPrintReady) {
+			void discoverZebraPrinters();
+		} else {
+			statusMessage = 'Zebra selected. Waiting for Browser Print to initialize...';
+		}
+	}
+
+	function onPageSizeChange() {
+		void renderAccuratePreview();
+	}
+
+	async function callLanPrinterApi(endpoint: 'test' | 'print'): Promise<LanApiResponse> {
+		const response = await fetch(`/api/printers/lan/${endpoint}`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ ip: printerIp.trim(), port: printerPort, pageSize })
+		});
+		const result = (await response.json()) as LanApiResponse;
+		if (!response.ok || !result.ok) {
+			throw new Error(result.error ?? `Printer request failed (${response.status}).`);
+		}
+		return result;
+	}
+
+	async function testLanPrinter() {
+		loading = true;
+		statusMessage = `Testing TCP connection to ${printerIp.trim()}:${printerPort}...`;
+
+		try {
+			await callLanPrinterApi('test');
+			statusMessage = `Connection successful: ${printerIp.trim()}:${printerPort} is accepting TCP connections.`;
+		} catch (error) {
+			statusMessage = `Connection test failed: ${toErrorMessage(error)}`;
+		} finally {
+			loading = false;
+		}
+	}
+
+	async function printTestLabel() {
+		if (transportFilter === 'lan') {
+			loading = true;
+			statusMessage = `Sending ${pageSize} ZPL label to ${printerIp.trim()}:${printerPort}...`;
+			try {
+				const result = await callLanPrinterApi('print');
+				statusMessage = `Print job sent successfully (${result.bytesSent ?? 0} bytes).`;
+			} catch (error) {
+				statusMessage = `Print failed: ${toErrorMessage(error)}`;
+			} finally {
+				loading = false;
+			}
+			return;
+		}
+
 		const activePrinter = getActiveSelectedPrinter();
 		if (!activePrinter) {
 			statusMessage = 'Select a printer first.';
@@ -463,7 +464,7 @@
 
 		loading = true;
 		statusMessage = `Sending ${pageSize} demo label to ${activePrinter.name}...`;
-		const labelZpl = buildDemoLabel();
+		const labelZpl = buildZplDemoLabel(pageSize);
 
 		activePrinter.send(
 			labelZpl,
@@ -582,9 +583,12 @@
 
 	onMount(() => {
 		void initBrowserPrint();
-		void renderAccuratePreview3x3();
+		void renderAccuratePreview();
 
 		return () => {
+			const activePreviewRequest = previewAbortController;
+			previewAbortController = null;
+			activePreviewRequest?.abort();
 			if (previewImageUrl) {
 				URL.revokeObjectURL(previewImageUrl);
 			}
@@ -593,31 +597,61 @@
 </script>
 
 <svelte:head>
-	<title>Zebra Web App Print Test</title>
+	<title>Web App Print Test</title>
 </svelte:head>
 
 <main class="page">
-	<h1>Zebra Web App Print Test</h1>
+	<h1>Web App Print Test</h1>
 	<p class="help">
-		Use this page in Android Chrome with the Zebra Browser Print app installed. It discovers Bluetooth
-		printers and sends GS1 demo labels for selected page sizes.
+		Select a printer brand and GS1 label sample. Zebra supports Browser Print, while LAN mode sends ZPL
+		directly through this app's local server. Label previews work without a connected printer.
 	</p>
 
 	<div class="panel">
+		<label for="printer-brand">Printer brand</label>
+		<select id="printer-brand" bind:value={printerBrand} onchange={onPrinterBrandChange}>
+			{#each PRINTER_BRAND_OPTIONS as option (option.value)}
+				<option value={option.value}>{option.label}</option>
+			{/each}
+		</select>
+
 		<label for="transport">Connection type</label>
-		<select id="transport" bind:value={transportFilter} onchange={onTransportChange} disabled={loading}>
+		<select
+			id="transport"
+			bind:value={transportFilter}
+			onchange={onTransportChange}
+			disabled={loading || printerBrand === 'honeywell'}
+		>
 			{#each TRANSPORT_OPTIONS as option (option.value)}
 				<option value={option.value}>{option.label}</option>
 			{/each}
 		</select>
 
-		<label for="printer">Available printer</label>
-		<select id="printer" bind:value={selectedUid} onchange={onPrinterChange} disabled={loading || printers.length === 0}>
-			<option value="">Select printer</option>
-			{#each printers as printer (printer.uid)}
-				<option value={printer.uid}>{printer.name}</option>
-			{/each}
-		</select>
+		{#if transportFilter === 'lan'}
+			<label for="printer-ip">Printer IP address</label>
+			<input
+				id="printer-ip"
+				type="text"
+				bind:value={printerIp}
+				inputmode="decimal"
+				placeholder="192.168.1.100"
+				autocomplete="off"
+				spellcheck="false"
+			/>
+			<label for="printer-port">Raw TCP port</label>
+			<input id="printer-port" type="number" bind:value={printerPort} min="1" max="65535" />
+			<p class="field-help">ZPL will be sent directly to this private LAN address. Port 9100 is the usual default.</p>
+		{/if}
+
+		{#if transportFilter !== 'lan'}
+			<label for="printer">Available printer</label>
+			<select id="printer" bind:value={selectedUid} onchange={onPrinterChange} disabled={loading || printers.length === 0}>
+				<option value="">Select printer</option>
+				{#each printers as printer (printer.uid)}
+					<option value={printer.uid}>{printer.name}</option>
+				{/each}
+			</select>
+		{/if}
 
 		<label for="page-size">Demo label type</label>
 		<select id="page-size" bind:value={pageSize} onchange={onPageSizeChange} disabled={loading}>
@@ -627,63 +661,72 @@
 		</select>
 
 		<div class="actions">
-			<button type="button" onclick={discoverBluetoothPrinters} disabled={loading || !browserPrintReady}>
-				Refresh printers
-			</button>
-			<button type="button" onclick={printTestLabel} disabled={loading || !selectedPrinter}>
-				Print selected demo label
-			</button>
+			{#if transportFilter === 'lan'}
+				<button type="button" onclick={testLanPrinter} disabled={loading || !printerIp.trim()}>
+					Test connection
+				</button>
+				<button type="button" onclick={printTestLabel} disabled={loading || !printerIp.trim()}>
+					Print selected demo label
+				</button>
+			{:else}
+				<button type="button" onclick={discoverZebraPrinters} disabled={loading || !browserPrintReady}>
+					Refresh printers
+				</button>
+				<button type="button" onclick={printTestLabel} disabled={loading || !selectedPrinter}>
+					Print selected demo label
+				</button>
+			{/if}
 		</div>
 
 		<details class="preview" open>
 			<summary>Print Preview (screen only)</summary>
 			<div class="preview-card">
-				{#if pageSize === '3x3'}
-					{#if previewLoading}
-						<p class="preview-note">Rendering accurate 3x3 preview from ZPL...</p>
-					{:else if previewImageUrl}
-						<img class="preview-image" src={previewImageUrl} alt="Accurate 3x3 preview generated from ZPL" />
-					{:else}
-						<div class="label3x3">
-							<div class="p-company">COMPANIA DEMO</div>
-							<div class="p-tagline">INNOVACION  CALIDAD  CONFIANZA</div>
-							<div class="p-product-label">PRODUCTO</div>
-							<div class="p-product">Barra Nutritiva Trigo / Avena<br />45 gramos</div>
-							<div class="p-divider p-divider-1"></div>
-							<div class="p-gtin-label">GTIN</div>
-							<div class="p-gtin-value">07433200758007</div>
-							<div class="p-divider p-divider-2"></div>
-							<div class="p-pack-label">FECHA EMPAQUE</div>
-							<div class="p-pack-value">260530</div>
-							<div class="p-divider p-divider-3"></div>
-							<div class="p-lot-label">LOTE</div>
-							<div class="p-lot-value">123ABC</div>
-							<div class="p-qr">QR</div>
-							<div class="p-qr-bottom">(01) 07433200758007</div>
-						</div>
-					{/if}
-					{#if previewError}
-						<p class="preview-error">Accurate preview is unavailable right now: {previewError}</p>
-					{/if}
-					<button
-						type="button"
-						onclick={renderAccuratePreview3x3}
-						disabled={previewLoading}
-						class="preview-refresh"
-					>
-						Refresh accurate preview
-					</button>
-					<p class="preview-qr"><strong>QR URL:</strong> {getPreviewQrUrl()}</p>
+				{#if previewLoading}
+					<p class="preview-note">Rendering accurate {pageSize} preview from ZPL...</p>
+				{:else if previewImageUrl}
+					<img class="preview-image" src={previewImageUrl} alt="Accurate {pageSize} preview generated from ZPL" />
+				{:else if pageSize === '3x3'}
+					<div class="label3x3">
+						<div class="p-company">COMPANIA DEMO</div>
+						<div class="p-tagline">INNOVACION  CALIDAD  CONFIANZA</div>
+						<div class="p-product-label">PRODUCTO</div>
+						<div class="p-product">Barra Nutritiva Trigo / Avena<br />45 gramos</div>
+						<div class="p-divider p-divider-1"></div>
+						<div class="p-gtin-label">GTIN</div>
+						<div class="p-gtin-value">07433200758007</div>
+						<div class="p-divider p-divider-2"></div>
+						<div class="p-pack-label">FECHA EMPAQUE</div>
+						<div class="p-pack-value">260530</div>
+						<div class="p-divider p-divider-3"></div>
+						<div class="p-lot-label">LOTE</div>
+						<div class="p-lot-value">123ABC</div>
+						<div class="p-qr">QR</div>
+						<div class="p-qr-bottom">(01) 07433200758007</div>
+					</div>
 				{:else if pageSize === '4x4'}
 					<div class="label-generic">
 						<strong>4x4 Case Label Preview</strong>
-						<p>Product + GTIN-14 + quantity + lot + dates + barcode area</p>
+						<p>Company + GS1 data + product and SSCC barcode areas</p>
 					</div>
 				{:else}
 					<div class="label-generic">
 						<strong>4x6 Logistics Label Preview</strong>
 						<p>From/To blocks + SSCC + GS1-128 + transport reference area</p>
 					</div>
+				{/if}
+				{#if previewError}
+					<p class="preview-error">Accurate preview is unavailable right now: {previewError}</p>
+				{/if}
+				<button
+					type="button"
+					onclick={renderAccuratePreview}
+					disabled={previewLoading}
+					class="preview-refresh"
+				>
+					Refresh accurate preview
+				</button>
+				{#if pageSize === '3x3'}
+					<p class="preview-qr"><strong>QR URL:</strong> {getPreviewQrUrl()}</p>
 				{/if}
 			</div>
 		</details>
@@ -726,8 +769,21 @@
 	}
 
 	select,
+	input,
 	button {
 		font-size: 1rem;
+	}
+
+	input {
+		box-sizing: border-box;
+		width: 100%;
+		padding: 0.5rem 0.6rem;
+	}
+
+	.field-help {
+		margin: -0.35rem 0 0;
+		color: #64748b;
+		font-size: 0.875rem;
 	}
 
 	.actions {

@@ -39,4 +39,23 @@ npm run build
 
 You can preview the production build with `npm run preview`.
 
-> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
+This project uses the SvelteKit Node adapter because LAN printing requires a server-side raw TCP socket.
+
+```sh
+npm run build
+npm run start
+```
+
+The computer running the Node process must be able to reach the printer on the same LAN. Open the app in a browser, select `LAN`, enter the printer IP and raw TCP port (normally `9100`), and use **Test connection** before printing a sample.
+
+For a Honeywell PM42, enable its Net1/raw TCP service and select the ZSim command language before sending these ZPL samples.
+
+### Optional printer allowlist
+
+By default, the API accepts only literal private or local IP addresses. To restrict it to known printers, set a comma-separated allowlist before starting the server:
+
+```sh
+PRINTER_IP_ALLOWLIST=192.168.1.50,192.168.1.51 npm run start
+```
+
+Keep this test application on a trusted network. Add authentication before exposing its print endpoints beyond that network.
