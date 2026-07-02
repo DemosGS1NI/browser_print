@@ -14,7 +14,11 @@
 		uid: string;
 		connection?: string;
 		deviceType?: string;
-		send: (data: string, onSuccess?: (response?: unknown) => void, onError?: (error: unknown) => void) => void;
+		send: (
+			data: string,
+			onSuccess?: (response?: unknown) => void,
+			onError?: (error: unknown) => void
+		) => void;
 		read?: (onSuccess?: (response?: unknown) => void, onError?: (error: unknown) => void) => void;
 	};
 
@@ -38,13 +42,8 @@
 		BrowserPrint?: BrowserPrintApi;
 	};
 
-	type LanApiResponse = {
-		ok: boolean;
-		error?: string;
-		bytesSent?: number;
-	};
-
 	const DEFAULT_LAN_PRINTER_IP = '192.168.1.123';
+	const PRINT_AGENT_URL = 'http://localhost:8080';
 
 	let browserPrintReady = $state(false);
 	let loading = $state(true);
@@ -56,7 +55,6 @@
 	let printerBrand = $state<PrinterBrand>('zebra');
 	let transportFilter = $state<TransportFilter>('bluetooth');
 	let printerIp = $state(DEFAULT_LAN_PRINTER_IP);
-	let printerPort = $state(9100);
 	let previewImageUrl = $state('');
 	let previewLoading = $state(false);
 	let previewError = $state('');
@@ -198,11 +196,15 @@
 			return connection.includes('usb');
 		}
 
-		return connection.includes('network') || connection.includes('tcp') || connection.includes('lan');
+		return (
+			connection.includes('network') || connection.includes('tcp') || connection.includes('lan')
+		);
 	}
 
 	function pickInitialPrinter(deviceList: BrowserPrintDevice[]) {
-		const preferredByName = deviceList.find((device) => device.name.toLowerCase().includes('qln420'));
+		const preferredByName = deviceList.find((device) =>
+			device.name.toLowerCase().includes('qln420')
+		);
 		if (preferredByName) {
 			return preferredByName;
 		}
@@ -257,14 +259,17 @@
 		const zpl = buildZplDemoLabel(pageSize);
 
 		try {
-			const response = await fetch(`https://api.labelary.com/v1/printers/8dpmm/labels/${previewSize}/0/`, {
-				method: 'POST',
-				headers: {
-					'Content-Type': 'application/x-www-form-urlencoded'
-				},
-				body: zpl,
-				signal: abortController.signal
-			});
+			const response = await fetch(
+				`https://api.labelary.com/v1/printers/8dpmm/labels/${previewSize}/0/`,
+				{
+					method: 'POST',
+					headers: {
+						'Content-Type': 'application/x-www-form-urlencoded'
+					},
+					body: zpl,
+					signal: abortController.signal
+				}
+			);
 
 			if (!response.ok) {
 				throw new Error(`Preview render failed (${response.status})`);
@@ -332,7 +337,9 @@
 			]);
 			const defaultPrinter = defaultResult.status === 'fulfilled' ? defaultResult.value : null;
 			const localPrinters = localResult.status === 'fulfilled' ? localResult.value : [];
-			const merged = [defaultPrinter, ...localPrinters].filter((device): device is BrowserPrintDevice => !!device);
+			const merged = [defaultPrinter, ...localPrinters].filter(
+				(device): device is BrowserPrintDevice => !!device
+			);
 
 			const seenUids: Record<string, boolean> = {};
 			const uniqueByUid = merged.filter((device) => {
@@ -385,7 +392,7 @@
 		if (printerBrand === 'zebra' && transportFilter !== 'lan') {
 			void discoverZebraPrinters();
 		} else if (transportFilter === 'lan') {
-			statusMessage = 'Enter the LAN printer IP address, then test the connection.';
+			statusMessage = 'Enter the LAN printer IP address, then test the local print agent.';
 		}
 	}
 
@@ -398,7 +405,7 @@
 		if (printerBrand === 'honeywell') {
 			transportFilter = 'lan';
 			loading = false;
-			statusMessage = 'Honeywell selected. Enter its LAN IP address, then test the connection.';
+			statusMessage = 'Honeywell selected. Test the local print agent before printing.';
 			return;
 		}
 
@@ -414,26 +421,39 @@
 		void renderAccuratePreview();
 	}
 
-	async function callLanPrinterApi(endpoint: 'test' | 'print'): Promise<LanApiResponse> {
-		const response = await fetch(`/api/printers/lan/${endpoint}`, {
+	async function getPrintAgentError(response: Response): Promise<string> {
+		const body = await response.text();
+		if (!body) return `Print agent request failed (${response.status}).`;
+
+		try {
+			const result = JSON.parse(body) as { error?: string; message?: string };
+			return result.error ?? result.message ?? `Print agent request failed (${response.status}).`;
+		} catch {
+			return body;
+		}
+	}
+
+	async function pingPrintAgent(): Promise<void> {
+		const response = await fetch(`${PRINT_AGENT_URL}/ping`);
+		if (!response.ok) throw new Error(await getPrintAgentError(response));
+	}
+
+	async function printWithAgent(zpl: string): Promise<void> {
+		const response = await fetch(`${PRINT_AGENT_URL}/print`, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ ip: printerIp.trim(), port: printerPort, pageSize })
+			body: JSON.stringify({ printerHostname: printerIp.trim(), text: zpl })
 		});
-		const result = (await response.json()) as LanApiResponse;
-		if (!response.ok || !result.ok) {
-			throw new Error(result.error ?? `Printer request failed (${response.status}).`);
-		}
-		return result;
+		if (!response.ok) throw new Error(await getPrintAgentError(response));
 	}
 
 	async function testLanPrinter() {
 		loading = true;
-		statusMessage = `Testing TCP connection to ${printerIp.trim()}:${printerPort}...`;
 
 		try {
-			await callLanPrinterApi('test');
-			statusMessage = `Connection successful: ${printerIp.trim()}:${printerPort} is accepting TCP connections.`;
+			statusMessage = `Checking local print agent at ${PRINT_AGENT_URL}...`;
+			await pingPrintAgent();
+			statusMessage = 'Local print agent is online and ready.';
 		} catch (error) {
 			statusMessage = `Connection test failed: ${toErrorMessage(error)}`;
 		} finally {
@@ -444,10 +464,11 @@
 	async function printTestLabel() {
 		if (transportFilter === 'lan') {
 			loading = true;
-			statusMessage = `Sending ${pageSize} ZPL label to ${printerIp.trim()}:${printerPort}...`;
+			const labelZpl = buildZplDemoLabel(pageSize);
 			try {
-				const result = await callLanPrinterApi('print');
-				statusMessage = `Print job sent successfully (${result.bytesSent ?? 0} bytes).`;
+				statusMessage = `Sending ${pageSize} ZPL label through the local print agent...`;
+				await printWithAgent(labelZpl);
+				statusMessage = 'Print job accepted by the local print agent.';
 			} catch (error) {
 				statusMessage = `Print failed: ${toErrorMessage(error)}`;
 			} finally {
@@ -603,8 +624,8 @@
 <main class="page">
 	<h1>Web App Print Test</h1>
 	<p class="help">
-		Select a printer brand and GS1 label sample. Zebra supports Browser Print, while LAN mode sends ZPL
-		directly through this app's local server. Label previews work without a connected printer.
+		Select a printer brand and GS1 label sample. Zebra USB/Bluetooth printing uses Browser Print;
+		LAN printing uses the local print agent. Label previews work without a connected printer.
 	</p>
 
 	<div class="panel">
@@ -638,14 +659,19 @@
 				autocomplete="off"
 				spellcheck="false"
 			/>
-			<label for="printer-port">Raw TCP port</label>
-			<input id="printer-port" type="number" bind:value={printerPort} min="1" max="65535" />
-			<p class="field-help">ZPL will be sent directly to this private LAN address. Port 9100 is the usual default.</p>
+			<p class="field-help">
+				ZPL will be sent through the local print agent at {PRINT_AGENT_URL}.
+			</p>
 		{/if}
 
 		{#if transportFilter !== 'lan'}
 			<label for="printer">Available printer</label>
-			<select id="printer" bind:value={selectedUid} onchange={onPrinterChange} disabled={loading || printers.length === 0}>
+			<select
+				id="printer"
+				bind:value={selectedUid}
+				onchange={onPrinterChange}
+				disabled={loading || printers.length === 0}
+			>
 				<option value="">Select printer</option>
 				{#each printers as printer (printer.uid)}
 					<option value={printer.uid}>{printer.name}</option>
@@ -669,7 +695,11 @@
 					Print selected demo label
 				</button>
 			{:else}
-				<button type="button" onclick={discoverZebraPrinters} disabled={loading || !browserPrintReady}>
+				<button
+					type="button"
+					onclick={discoverZebraPrinters}
+					disabled={loading || !browserPrintReady}
+				>
 					Refresh printers
 				</button>
 				<button type="button" onclick={printTestLabel} disabled={loading || !selectedPrinter}>
@@ -684,11 +714,15 @@
 				{#if previewLoading}
 					<p class="preview-note">Rendering accurate {pageSize} preview from ZPL...</p>
 				{:else if previewImageUrl}
-					<img class="preview-image" src={previewImageUrl} alt="Accurate {pageSize} preview generated from ZPL" />
+					<img
+						class="preview-image"
+						src={previewImageUrl}
+						alt="Accurate {pageSize} preview generated from ZPL"
+					/>
 				{:else if pageSize === '3x3'}
 					<div class="label3x3">
 						<div class="p-company">COMPANIA DEMO</div>
-						<div class="p-tagline">INNOVACION  CALIDAD  CONFIANZA</div>
+						<div class="p-tagline">INNOVACION CALIDAD CONFIANZA</div>
 						<div class="p-product-label">PRODUCTO</div>
 						<div class="p-product">Barra Nutritiva Trigo / Avena<br />45 gramos</div>
 						<div class="p-divider p-divider-1"></div>

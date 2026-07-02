@@ -39,23 +39,15 @@ npm run build
 
 You can preview the production build with `npm run preview`.
 
-This project uses the SvelteKit Node adapter because LAN printing requires a server-side raw TCP socket.
+This project uses the SvelteKit Vercel adapter. Zebra USB/Bluetooth printing uses Zebra Browser Print, while LAN printing is sent from the browser to a local print agent.
 
 ```sh
 npm run build
-npm run start
+npm run preview
 ```
 
-The computer running the Node process must be able to reach the printer on the same LAN. Open the app in a browser, select `LAN`, enter the printer IP and raw TCP port (normally `9100`), and use **Test connection** before printing a sample.
+The computer running the browser and print agent must be able to reach the printer on the same LAN. Select `LAN`, enter the printer IP, and use **Test connection** before printing a sample.
 
-For a Honeywell PM42, enable its Net1/raw TCP service and select the ZSim command language before sending these ZPL samples.
+For a Honeywell PM42, enable its Net1/raw TCP service, select the ZSim command language, and run the local print agent on `http://localhost:8080`. The app checks `GET /ping` and sends labels to `POST /print` as JSON containing `printerHostname` and `text`.
 
-### Optional printer allowlist
-
-By default, the API accepts only literal private or local IP addresses. To restrict it to known printers, set a comma-separated allowlist before starting the server:
-
-```sh
-PRINTER_IP_ALLOWLIST=192.168.1.50,192.168.1.51 npm run start
-```
-
-Keep this test application on a trusted network. Add authentication before exposing its print endpoints beyond that network.
+Configure the print agent's CORS allowlist to include the deployed Vercel origin. Keep the agent restricted to trusted origins and printer addresses.
