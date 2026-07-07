@@ -4,8 +4,10 @@
 		buildCalibrationLabel3x3,
 		buildDemoLabel as buildZplDemoLabel,
 		DIGITAL_LINK_QR_URL,
+		getPageSize,
+		LOBSTER_DIGITAL_LINK_URL,
 		SIZE_DOTS,
-		type PageSize
+		type LabelSample
 	} from '$lib/printing/zpl';
 	import browserPrintUrl from '../../../zebra-browser-print-js-v31250/BrowserPrint-3.1.250.min.js?url';
 
@@ -51,7 +53,7 @@
 	let printers = $state<BrowserPrintDevice[]>([]);
 	let selectedUid = $state('');
 	let selectedPrinter = $state<BrowserPrintDevice | null>(null);
-	let pageSize = $state<PageSize>('4x6');
+	let pageSize = $state<LabelSample>('4x6');
 	let printerBrand = $state<PrinterBrand>('zebra');
 	let transportFilter = $state<TransportFilter>('bluetooth');
 	let printerIp = $state(DEFAULT_LAN_PRINTER_IP);
@@ -61,9 +63,11 @@
 	let previewAbortController: AbortController | null = null;
 	let zebraDiscoveryRequestId = 0;
 
-	const PAGE_SIZE_OPTIONS: { value: PageSize; label: string }[] = [
+	const PAGE_SIZE_OPTIONS: { value: LabelSample; label: string }[] = [
 		{ value: '4x6', label: '4x6 Logistic Label (GS1-128)' },
-		{ value: '4x4', label: '4x4 Case Label (GTIN-14)' },
+		{ value: '4x4', label: '4x4 Lobster Tails Label (GS1-128)' },
+		{ value: '4x4-datamatrix', label: '4x4 Lobster Tails Label (GS1 DataMatrix)' },
+		{ value: '4x4-digital-link', label: '4x4 Lobster Tails Label (Digital Link QR)' },
 		{ value: '3x3', label: '3x3 GS1 Digital Link QR' }
 	];
 
@@ -239,8 +243,9 @@
 	}
 
 	function getPreviewQrUrl(): string | null {
-		if (pageSize !== '3x3') return null;
-		return DIGITAL_LINK_QR_URL;
+		if (pageSize === '3x3') return DIGITAL_LINK_QR_URL;
+		if (pageSize === '4x4-digital-link') return LOBSTER_DIGITAL_LINK_URL;
+		return null;
 	}
 
 	async function renderAccuratePreview() {
@@ -255,7 +260,7 @@
 			previewImageUrl = '';
 		}
 
-		const previewSize = pageSize;
+		const previewSize = getPageSize(pageSize);
 		const zpl = buildZplDemoLabel(pageSize);
 
 		try {
@@ -737,10 +742,16 @@
 						<div class="p-qr">QR</div>
 						<div class="p-qr-bottom">(01) 07433200758007</div>
 					</div>
-				{:else if pageSize === '4x4'}
+				{:else if pageSize.startsWith('4x4')}
 					<div class="label-generic">
-						<strong>4x4 Case Label Preview</strong>
-						<p>Company + GS1 data + product and SSCC barcode areas</p>
+						<strong>4x4 Lobster Tails Label Preview</strong>
+						{#if pageSize === '4x4'}
+							<p>Product header + GTIN/net weight + two GS1-128 barcode areas</p>
+						{:else if pageSize === '4x4-datamatrix'}
+							<p>Product header + GTIN/net weight + GS1 DataMatrix</p>
+						{:else}
+							<p>Product header + GTIN/net weight + GS1 Digital Link QR</p>
+						{/if}
 					</div>
 				{:else}
 					<div class="label-generic">
@@ -759,7 +770,7 @@
 				>
 					Refresh accurate preview
 				</button>
-				{#if pageSize === '3x3'}
+				{#if getPreviewQrUrl()}
 					<p class="preview-qr"><strong>QR URL:</strong> {getPreviewQrUrl()}</p>
 				{/if}
 			</div>
