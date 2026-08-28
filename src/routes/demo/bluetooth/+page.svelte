@@ -4,8 +4,8 @@
 		buildCalibrationLabel3x3,
 		buildDemoLabel as buildZplDemoLabel,
 		DIGITAL_LINK_QR_URL,
+		GENERIC_CASE_DIGITAL_LINK_URL,
 		getPageSize,
-		LOBSTER_DIGITAL_LINK_URL,
 		SIZE_DOTS,
 		type LabelSample
 	} from '$lib/printing/zpl';
@@ -49,7 +49,7 @@
 
 	let browserPrintReady = $state(false);
 	let loading = $state(true);
-	let statusMessage = $state('Loading BrowserPrint library...');
+	let statusMessage = $state('Cargando la librería BrowserPrint...');
 	let printers = $state<BrowserPrintDevice[]>([]);
 	let selectedUid = $state('');
 	let selectedPrinter = $state<BrowserPrintDevice | null>(null);
@@ -64,11 +64,11 @@
 	let zebraDiscoveryRequestId = 0;
 
 	const PAGE_SIZE_OPTIONS: { value: LabelSample; label: string }[] = [
-		{ value: '4x6', label: '4x6 Logistic Label (GS1-128)' },
-		{ value: '4x4', label: '4x4 Lobster Tails Label (GS1-128)' },
-		{ value: '4x4-datamatrix', label: '4x4 Lobster Tails Label (GS1 DataMatrix)' },
-		{ value: '4x4-digital-link', label: '4x4 Lobster Tails Label (Digital Link QR)' },
-		{ value: '3x3', label: '3x3 GS1 Digital Link QR' }
+		{ value: '4x6', label: 'Etiqueta logística 4x6 (GS1-128)' },
+		{ value: '4x4', label: 'Etiqueta genérica 4x4 (GS1-128)' },
+		{ value: '4x4-datamatrix', label: 'Etiqueta genérica 4x4 (GS1 DataMatrix)' },
+		{ value: '4x4-digital-link', label: 'Etiqueta genérica 4x4 (QR Digital Link)' },
+		{ value: '3x3', label: 'Etiqueta 3x3 GS1 Digital Link QR' }
 	];
 
 	const PRINTER_BRAND_OPTIONS: { value: PrinterBrand; label: string }[] = [
@@ -83,6 +83,25 @@
 	];
 
 	const PRINTER_DISCOVERY_TIMEOUT_MS = 5000;
+	const TEST_FLOW_STEPS = [
+		{
+			title: 'Selecciona',
+			text: 'Escoge la marca, el tipo de conexión y la etiqueta que quieres probar.'
+		},
+		{
+			title: 'Verifica',
+			text: 'Confirma que Browser Print o el agente local puedan comunicarse con la impresora.'
+		},
+		{
+			title: 'Imprime',
+			text: 'Envía ZPL real para validar tamaño, códigos GS1, calibración y conectividad.'
+		}
+	];
+	const REQUIREMENT_ITEMS = [
+		'Zebra Browser Print para USB/Bluetooth',
+		'Agente local en localhost:8080 para LAN',
+		'Impresora compatible con ZPL o ZSim'
+	];
 
 	function scriptAlreadyLoaded(src: string): boolean {
 		return !!document.querySelector(`script[src="${src}"]`);
@@ -99,31 +118,31 @@
 			script.src = src;
 			script.async = true;
 			script.onload = () => resolve();
-			script.onerror = () => reject(new Error(`Unable to load ${src}`));
+			script.onerror = () => reject(new Error(`No se pudo cargar ${src}`));
 			document.head.appendChild(script);
 		});
 	}
 
 	async function initBrowserPrint() {
 		loading = true;
-		statusMessage = 'Loading BrowserPrint library...';
+		statusMessage = 'Cargando la librería BrowserPrint...';
 
 		try {
 			const win = window as WindowWithZebra;
 			await loadScript(browserPrintUrl);
 			if (!win.BrowserPrint) {
-				throw new Error('BrowserPrint loaded but did not initialize.');
+				throw new Error('BrowserPrint cargó, pero no se inicializó.');
 			}
 
 			browserPrintReady = true;
 			if (printerBrand === 'zebra') {
-				statusMessage = 'BrowserPrint ready. Discovering Zebra printers...';
+				statusMessage = 'BrowserPrint está listo. Buscando impresoras Zebra...';
 				await discoverZebraPrinters();
 			}
 		} catch (error) {
 			if (printerBrand === 'zebra') {
 				const message = error instanceof Error ? error.message : String(error);
-				statusMessage = `Zebra Browser Print initialization failed: ${message}`;
+				statusMessage = `No se pudo iniciar Zebra Browser Print: ${message}`;
 			}
 		} finally {
 			loading = false;
@@ -134,7 +153,7 @@
 		return new Promise((resolve, reject) => {
 			const win = window as WindowWithZebra;
 			if (!win.BrowserPrint) {
-				reject(new Error('BrowserPrint API is not available.'));
+				reject(new Error('La API de BrowserPrint no está disponible.'));
 				return;
 			}
 
@@ -146,7 +165,7 @@
 		return new Promise((resolve, reject) => {
 			const win = window as WindowWithZebra;
 			if (!win.BrowserPrint) {
-				reject(new Error('BrowserPrint API is not available.'));
+				reject(new Error('La API de BrowserPrint no está disponible.'));
 				return;
 			}
 
@@ -168,7 +187,7 @@
 	function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
 		return new Promise((resolve, reject) => {
 			const timeoutId = setTimeout(
-				() => reject(new Error(`Printer discovery timed out after ${timeoutMs / 1000} seconds.`)),
+				() => reject(new Error(`La búsqueda de impresoras excedió ${timeoutMs / 1000} segundos.`)),
 				timeoutMs
 			);
 
@@ -237,14 +256,14 @@
 
 	function handleTransportFailure(message: string, context: string) {
 		const hint = looksLikeOfflineTransportError(message)
-			? '. Connection appears offline. Reconnect in Zebra Browser Print and tap Refresh printers.'
+			? '. La conexión parece estar fuera de línea. Reconecta en Zebra Browser Print y presiona Actualizar impresoras.'
 			: '';
 		statusMessage = `${context}: ${message}${hint}`;
 	}
 
 	function getPreviewQrUrl(): string | null {
 		if (pageSize === '3x3') return DIGITAL_LINK_QR_URL;
-		if (pageSize === '4x4-digital-link') return LOBSTER_DIGITAL_LINK_URL;
+		if (pageSize === '4x4-digital-link') return GENERIC_CASE_DIGITAL_LINK_URL;
 		return null;
 	}
 
@@ -277,7 +296,7 @@
 			);
 
 			if (!response.ok) {
-				throw new Error(`Preview render failed (${response.status})`);
+				throw new Error(`El render de la vista previa falló (${response.status})`);
 			}
 
 			const blob = await response.blob();
@@ -328,12 +347,12 @@
 
 		const win = window as WindowWithZebra;
 		if (!win.BrowserPrint) {
-			statusMessage = 'BrowserPrint API is not available.';
+			statusMessage = 'La API de BrowserPrint no está disponible.';
 			return;
 		}
 
 		loading = true;
-		statusMessage = 'Searching for printers...';
+		statusMessage = 'Buscando impresoras...';
 
 		try {
 			const [defaultResult, localResult] = await Promise.allSettled([
@@ -366,15 +385,15 @@
 			if (initial) {
 				selectedUid = initial.uid;
 				syncSelectedPrinter();
-				statusMessage = `Ready. Selected printer: ${initial.name}`;
+				statusMessage = `Listo. Impresora seleccionada: ${initial.name}`;
 			} else {
 				selectedUid = '';
 				selectedPrinter = null;
-				statusMessage = `No ${transportFilter.toUpperCase()} Zebra printer is connected. Label previews remain available.`;
+				statusMessage = `No hay una impresora Zebra por ${transportFilter.toUpperCase()} conectada. La vista previa sigue disponible.`;
 			}
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			statusMessage = `Discovery failed: ${message}`;
+			statusMessage = `La búsqueda falló: ${message}`;
 			printers = [];
 			selectedUid = '';
 			selectedPrinter = null;
@@ -386,7 +405,7 @@
 	function onPrinterChange() {
 		syncSelectedPrinter();
 		if (selectedPrinter) {
-			statusMessage = `Selected printer: ${selectedPrinter.name}`;
+			statusMessage = `Impresora seleccionada: ${selectedPrinter.name}`;
 		}
 	}
 
@@ -397,7 +416,7 @@
 		if (printerBrand === 'zebra' && transportFilter !== 'lan') {
 			void discoverZebraPrinters();
 		} else if (transportFilter === 'lan') {
-			statusMessage = 'Enter the LAN printer IP address, then test the local print agent.';
+			statusMessage = 'Ingresa la IP de la impresora LAN y luego prueba el agente local.';
 		}
 	}
 
@@ -410,7 +429,7 @@
 		if (printerBrand === 'honeywell') {
 			transportFilter = 'lan';
 			loading = false;
-			statusMessage = 'Honeywell selected. Test the local print agent before printing.';
+			statusMessage = 'Honeywell seleccionado. Prueba el agente local antes de imprimir.';
 			return;
 		}
 
@@ -418,7 +437,7 @@
 		if (browserPrintReady) {
 			void discoverZebraPrinters();
 		} else {
-			statusMessage = 'Zebra selected. Waiting for Browser Print to initialize...';
+			statusMessage = 'Zebra seleccionado. Esperando que Browser Print inicie...';
 		}
 	}
 
@@ -428,11 +447,15 @@
 
 	async function getPrintAgentError(response: Response): Promise<string> {
 		const body = await response.text();
-		if (!body) return `Print agent request failed (${response.status}).`;
+		if (!body) return `La solicitud al agente de impresión falló (${response.status}).`;
 
 		try {
 			const result = JSON.parse(body) as { error?: string; message?: string };
-			return result.error ?? result.message ?? `Print agent request failed (${response.status}).`;
+			return (
+				result.error ??
+				result.message ??
+				`La solicitud al agente de impresión falló (${response.status}).`
+			);
 		} catch {
 			return body;
 		}
@@ -456,11 +479,11 @@
 		loading = true;
 
 		try {
-			statusMessage = `Checking local print agent at ${PRINT_AGENT_URL}...`;
+			statusMessage = `Revisando el agente local en ${PRINT_AGENT_URL}...`;
 			await pingPrintAgent();
-			statusMessage = 'Local print agent is online and ready.';
+			statusMessage = 'El agente local está en línea y listo.';
 		} catch (error) {
-			statusMessage = `Connection test failed: ${toErrorMessage(error)}`;
+			statusMessage = `La prueba de conexión falló: ${toErrorMessage(error)}`;
 		} finally {
 			loading = false;
 		}
@@ -471,11 +494,11 @@
 			loading = true;
 			const labelZpl = buildZplDemoLabel(pageSize);
 			try {
-				statusMessage = `Sending ${pageSize} ZPL label through the local print agent...`;
+				statusMessage = `Enviando etiqueta ZPL ${pageSize} mediante el agente local...`;
 				await printWithAgent(labelZpl);
-				statusMessage = 'Print job accepted by the local print agent.';
+				statusMessage = 'El agente local aceptó el trabajo de impresión.';
 			} catch (error) {
-				statusMessage = `Print failed: ${toErrorMessage(error)}`;
+				statusMessage = `La impresión falló: ${toErrorMessage(error)}`;
 			} finally {
 				loading = false;
 			}
@@ -484,12 +507,12 @@
 
 		const activePrinter = getActiveSelectedPrinter();
 		if (!activePrinter) {
-			statusMessage = 'Select a printer first.';
+			statusMessage = 'Primero selecciona una impresora.';
 			return;
 		}
 
 		loading = true;
-		statusMessage = `Sending ${pageSize} demo label to ${activePrinter.name}...`;
+		statusMessage = `Enviando etiqueta demo ${pageSize} a ${activePrinter.name}...`;
 		const labelZpl = buildZplDemoLabel(pageSize);
 
 		activePrinter.send(
@@ -497,12 +520,12 @@
 			() => {
 				loading = false;
 				statusMessage =
-					'Print job sent. If no label prints, check media size, paper, battery, and Bluetooth pairing in Browser Print app.';
+					'Trabajo enviado. Si no sale la etiqueta, revisa tamaño de papel, batería, emparejamiento y configuración en Browser Print.';
 			},
 			(error) => {
 				loading = false;
 				const message = toErrorMessage(error);
-				handleTransportFailure(message, 'Print failed');
+				handleTransportFailure(message, 'La impresión falló');
 			}
 		);
 	}
@@ -510,12 +533,12 @@
 	function printCalibrationPattern3x3() {
 		const activePrinter = getActiveSelectedPrinter();
 		if (!activePrinter) {
-			statusMessage = 'Select a printer first.';
+			statusMessage = 'Primero selecciona una impresora.';
 			return;
 		}
 
 		loading = true;
-		statusMessage = `Sending 3x3 calibration pattern to ${activePrinter.name}...`;
+		statusMessage = `Enviando patrón de calibración 3x3 a ${activePrinter.name}...`;
 		const labelZpl = buildCalibrationLabel3x3();
 
 		activePrinter.send(
@@ -523,12 +546,12 @@
 			() => {
 				loading = false;
 				statusMessage =
-					'Calibration label sent. Check whether the next ready label is used and whether borders are fully visible.';
+					'Etiqueta de calibración enviada. Revisa si usa la siguiente etiqueta disponible y si los bordes se ven completos.';
 			},
 			(error) => {
 				loading = false;
 				const message = toErrorMessage(error);
-				handleTransportFailure(message, 'Calibration print failed');
+				handleTransportFailure(message, 'La impresión de calibración falló');
 			}
 		);
 	}
@@ -536,7 +559,7 @@
 	function sendRawCommand(command: string, successMessage: string, errorPrefix: string) {
 		const activePrinter = getActiveSelectedPrinter();
 		if (!activePrinter) {
-			statusMessage = 'Select a printer first.';
+			statusMessage = 'Primero selecciona una impresora.';
 			return;
 		}
 
@@ -558,20 +581,20 @@
 	function runMediaCalibration() {
 		sendRawCommand(
 			'~JC',
-			'Media calibration command sent (~JC). Printer may feed labels while calibrating.',
-			'Calibration command failed'
+			'Comando de calibración de papel enviado (~JC). La impresora puede avanzar etiquetas mientras calibra.',
+			'El comando de calibración falló'
 		);
 	}
 
 	function printSafeMode3x3() {
 		const activePrinter = getActiveSelectedPrinter();
 		if (!activePrinter) {
-			statusMessage = 'Select a printer first.';
+			statusMessage = 'Primero selecciona una impresora.';
 			return;
 		}
 
 		loading = true;
-		statusMessage = `Sending 3x3 safe-mode test to ${activePrinter.name}...`;
+		statusMessage = `Enviando prueba segura 3x3 a ${activePrinter.name}...`;
 		const safeZpl = [
 			'^XA',
 			'^CI28',
@@ -585,9 +608,9 @@
 			`^PW${SIZE_DOTS['3x3'].pw}`,
 			`^LL${SIZE_DOTS['3x3'].ll}`,
 			'^FO0,0^GB609,609,3^FS',
-			'^FO24,24^CF0,26^FD3x3 SAFE MODE^FS',
-			'^FO24,60^CF0,20^FDNo ^XB. Gap sensing. DT.^FS',
-			'^FO24,565^CF0,20^FDEnd marker^FS',
+			'^FO24,24^CF0,26^FD3x3 MODO SEGURO^FS',
+			'^FO24,60^CF0,20^FDSin ^XB. Gap sensing. DT.^FS',
+			'^FO24,565^CF0,20^FDMarca final^FS',
 			'^PQ1,0,1,N',
 			'^XZ'
 		].join('');
@@ -597,12 +620,12 @@
 			() => {
 				loading = false;
 				statusMessage =
-					'Safe-mode label sent. If first label is still blank, printer settings are likely the root cause.';
+					'Etiqueta de modo seguro enviada. Si la primera etiqueta sigue en blanco, probablemente el problema está en la configuración de la impresora.';
 			},
 			(error) => {
 				loading = false;
 				const message = toErrorMessage(error);
-				handleTransportFailure(message, 'Safe-mode print failed');
+				handleTransportFailure(message, 'La impresión de modo seguro falló');
 			}
 		);
 	}
@@ -623,81 +646,119 @@
 </script>
 
 <svelte:head>
-	<title>Web App Print Test</title>
+	<title>Prueba de impresión web</title>
 </svelte:head>
 
 <main class="page">
-	<h1>Web App Print Test</h1>
-	<p class="help">
-		Select a printer brand and GS1 label sample. Zebra USB/Bluetooth printing uses Browser Print;
-		LAN printing uses the local print agent. Label previews work without a connected printer.
-	</p>
+	<section class="hero" aria-labelledby="page-title">
+		<div>
+			<p class="eyebrow">Laboratorio de impresión local</p>
+			<h1 id="page-title">Prueba de impresión desde una aplicación web</h1>
+			<p class="help">
+				Esta demo valida si el navegador puede enviar etiquetas ZPL a impresoras locales por USB,
+				Bluetooth o LAN usando Zebra Browser Print o un agente local de impresión.
+			</p>
+		</div>
+		<div class="hero-meter" aria-label="Resumen de tecnología">
+			<strong>ZPL</strong>
+			<span>GS1-128 / DataMatrix / Digital Link QR</span>
+		</div>
+	</section>
+
+	<section class="explainer" aria-label="Cómo funciona la prueba">
+		{#each TEST_FLOW_STEPS as step (step.title)}
+			<div class="flow-step">
+				<strong>{step.title}</strong>
+				<span>{step.text}</span>
+			</div>
+		{/each}
+	</section>
 
 	<div class="panel">
-		<label for="printer-brand">Printer brand</label>
-		<select id="printer-brand" bind:value={printerBrand} onchange={onPrinterBrandChange}>
-			{#each PRINTER_BRAND_OPTIONS as option (option.value)}
-				<option value={option.value}>{option.label}</option>
-			{/each}
-		</select>
+		<div class="panel-header">
+			<div>
+				<h2>Configurar prueba</h2>
+				<p>Elige el escenario y envía una etiqueta demo a la impresora seleccionada.</p>
+			</div>
+			<span class="connection-badge">{transportFilter.toUpperCase()}</span>
+		</div>
 
-		<label for="transport">Connection type</label>
-		<select
-			id="transport"
-			bind:value={transportFilter}
-			onchange={onTransportChange}
-			disabled={loading || printerBrand === 'honeywell'}
-		>
-			{#each TRANSPORT_OPTIONS as option (option.value)}
-				<option value={option.value}>{option.label}</option>
-			{/each}
-		</select>
+		<div class="form-grid">
+			<div class="field">
+				<label for="printer-brand">Marca de impresora</label>
+				<select id="printer-brand" bind:value={printerBrand} onchange={onPrinterBrandChange}>
+					{#each PRINTER_BRAND_OPTIONS as option (option.value)}
+						<option value={option.value}>{option.label}</option>
+					{/each}
+				</select>
+			</div>
 
-		{#if transportFilter === 'lan'}
-			<label for="printer-ip">Printer IP address</label>
-			<input
-				id="printer-ip"
-				type="text"
-				bind:value={printerIp}
-				inputmode="decimal"
-				placeholder="192.168.1.100"
-				autocomplete="off"
-				spellcheck="false"
-			/>
-			<p class="field-help">
-				ZPL will be sent through the local print agent at {PRINT_AGENT_URL}.
-			</p>
-		{/if}
+			<div class="field">
+				<label for="transport">Tipo de conexión</label>
+				<select
+					id="transport"
+					bind:value={transportFilter}
+					onchange={onTransportChange}
+					disabled={loading || printerBrand === 'honeywell'}
+				>
+					{#each TRANSPORT_OPTIONS as option (option.value)}
+						<option value={option.value}>{option.label}</option>
+					{/each}
+				</select>
+			</div>
 
-		{#if transportFilter !== 'lan'}
-			<label for="printer">Available printer</label>
-			<select
-				id="printer"
-				bind:value={selectedUid}
-				onchange={onPrinterChange}
-				disabled={loading || printers.length === 0}
-			>
-				<option value="">Select printer</option>
-				{#each printers as printer (printer.uid)}
-					<option value={printer.uid}>{printer.name}</option>
-				{/each}
-			</select>
-		{/if}
+			{#if transportFilter === 'lan'}
+				<div class="field">
+					<label for="printer-ip">Dirección IP de la impresora</label>
+					<input
+						id="printer-ip"
+						type="text"
+						bind:value={printerIp}
+						inputmode="decimal"
+						placeholder="192.168.1.100"
+						autocomplete="off"
+						spellcheck="false"
+					/>
+					<p class="field-help">
+						El ZPL se enviará mediante el agente local en {PRINT_AGENT_URL}.
+					</p>
+				</div>
+			{/if}
 
-		<label for="page-size">Demo label type</label>
-		<select id="page-size" bind:value={pageSize} onchange={onPageSizeChange} disabled={loading}>
-			{#each PAGE_SIZE_OPTIONS as option (option.value)}
-				<option value={option.value}>{option.label}</option>
-			{/each}
-		</select>
+			{#if transportFilter !== 'lan'}
+				<div class="field">
+					<label for="printer">Impresora disponible</label>
+					<select
+						id="printer"
+						bind:value={selectedUid}
+						onchange={onPrinterChange}
+						disabled={loading || printers.length === 0}
+					>
+						<option value="">Seleccionar impresora</option>
+						{#each printers as printer (printer.uid)}
+							<option value={printer.uid}>{printer.name}</option>
+						{/each}
+					</select>
+				</div>
+			{/if}
+
+			<div class="field field-wide">
+				<label for="page-size">Tipo de etiqueta demo</label>
+				<select id="page-size" bind:value={pageSize} onchange={onPageSizeChange} disabled={loading}>
+					{#each PAGE_SIZE_OPTIONS as option (option.value)}
+						<option value={option.value}>{option.label}</option>
+					{/each}
+				</select>
+			</div>
+		</div>
 
 		<div class="actions">
 			{#if transportFilter === 'lan'}
 				<button type="button" onclick={testLanPrinter} disabled={loading || !printerIp.trim()}>
-					Test connection
+					Probar conexión
 				</button>
 				<button type="button" onclick={printTestLabel} disabled={loading || !printerIp.trim()}>
-					Print selected demo label
+					Imprimir etiqueta seleccionada
 				</button>
 			{:else}
 				<button
@@ -705,24 +766,30 @@
 					onclick={discoverZebraPrinters}
 					disabled={loading || !browserPrintReady}
 				>
-					Refresh printers
+					Actualizar impresoras
 				</button>
 				<button type="button" onclick={printTestLabel} disabled={loading || !selectedPrinter}>
-					Print selected demo label
+					Imprimir etiqueta seleccionada
 				</button>
 			{/if}
 		</div>
 
+		<div class="requirements" aria-label="Requisitos del escenario">
+			{#each REQUIREMENT_ITEMS as item (item)}
+				<span>{item}</span>
+			{/each}
+		</div>
+
 		<details class="preview" open>
-			<summary>Print Preview (screen only)</summary>
+			<summary>Vista previa de impresión (solo pantalla)</summary>
 			<div class="preview-card">
 				{#if previewLoading}
-					<p class="preview-note">Rendering accurate {pageSize} preview from ZPL...</p>
+					<p class="preview-note">Renderizando vista previa precisa {pageSize} desde ZPL...</p>
 				{:else if previewImageUrl}
 					<img
 						class="preview-image"
 						src={previewImageUrl}
-						alt="Accurate {pageSize} preview generated from ZPL"
+						alt="Vista previa precisa {pageSize} generada desde ZPL"
 					/>
 				{:else if pageSize === '3x3'}
 					<div class="label3x3">
@@ -744,23 +811,25 @@
 					</div>
 				{:else if pageSize.startsWith('4x4')}
 					<div class="label-generic">
-						<strong>4x4 Lobster Tails Label Preview</strong>
+						<strong>Vista previa de etiqueta genérica 4x4</strong>
 						{#if pageSize === '4x4'}
-							<p>Product header + GTIN/net weight + two GS1-128 barcode areas</p>
+							<p>Encabezado de producto + GTIN/peso neto + dos códigos GS1-128</p>
 						{:else if pageSize === '4x4-datamatrix'}
-							<p>Product header + GTIN/net weight + GS1 DataMatrix</p>
+							<p>Encabezado de producto + GTIN/peso neto + GS1 DataMatrix</p>
 						{:else}
-							<p>Product header + GTIN/net weight + GS1 Digital Link QR</p>
+							<p>Encabezado de producto + GTIN/peso neto + QR GS1 Digital Link</p>
 						{/if}
 					</div>
 				{:else}
 					<div class="label-generic">
-						<strong>4x6 Logistics Label Preview</strong>
-						<p>From/To blocks + SSCC + GS1-128 + transport reference area</p>
+						<strong>Vista previa de etiqueta logística 4x6</strong>
+						<p>Bloques origen/destino + SSCC + GS1-128 + referencia de transporte</p>
 					</div>
 				{/if}
 				{#if previewError}
-					<p class="preview-error">Accurate preview is unavailable right now: {previewError}</p>
+					<p class="preview-error">
+						La vista previa precisa no está disponible ahora: {previewError}
+					</p>
 				{/if}
 				<button
 					type="button"
@@ -768,10 +837,10 @@
 					disabled={previewLoading}
 					class="preview-refresh"
 				>
-					Refresh accurate preview
+					Actualizar vista previa
 				</button>
 				{#if getPreviewQrUrl()}
-					<p class="preview-qr"><strong>QR URL:</strong> {getPreviewQrUrl()}</p>
+					<p class="preview-qr"><strong>URL del QR:</strong> {getPreviewQrUrl()}</p>
 				{/if}
 			</div>
 		</details>
@@ -781,35 +850,173 @@
 
 <style>
 	:global(body) {
-		font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+		min-height: 100vh;
+		margin: 0;
+		font-family:
+			Inter,
+			ui-sans-serif,
+			system-ui,
+			-apple-system,
+			BlinkMacSystemFont,
+			'Segoe UI',
+			sans-serif;
+		color: #16211b;
+		background:
+			linear-gradient(135deg, rgba(239, 246, 241, 0.95), rgba(250, 251, 248, 0.96)),
+			linear-gradient(90deg, rgba(32, 99, 74, 0.08), rgba(200, 118, 44, 0.1));
 	}
 
 	.page {
-		max-width: 44rem;
-		margin: 2rem auto;
-		padding: 0 1rem;
+		width: min(100% - 2rem, 72rem);
+		margin: 0 auto;
+		padding: 2.5rem 0 3rem;
+	}
+
+	.hero {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) minmax(16rem, 22rem);
+		gap: 2rem;
+		align-items: end;
+		margin-bottom: 1.5rem;
+		padding-bottom: 1.75rem;
+		border-bottom: 1px solid rgba(22, 33, 27, 0.12);
+	}
+
+	.eyebrow {
+		margin: 0 0 0.6rem;
+		color: #28724e;
+		font-size: 0.78rem;
+		font-weight: 800;
+		text-transform: uppercase;
+		letter-spacing: 0.08em;
+	}
+
+	h1,
+	h2 {
+		margin: 0;
+		line-height: 1.05;
 	}
 
 	h1 {
-		font-size: 1.7rem;
-		margin-bottom: 0.75rem;
+		max-width: 48rem;
+		font-size: clamp(2.15rem, 5vw, 4.8rem);
+		font-weight: 850;
 	}
 
 	.help {
-		margin-bottom: 1rem;
-		color: #334155;
+		max-width: 45rem;
+		margin: 1rem 0 0;
+		color: #4a5a50;
+		font-size: 1.08rem;
+		line-height: 1.65;
+	}
+
+	.hero-meter {
+		display: grid;
+		gap: 0.45rem;
+		padding: 1rem;
+		border: 1px solid rgba(40, 114, 78, 0.22);
+		border-radius: 0.5rem;
+		background: rgba(255, 255, 255, 0.72);
+		box-shadow: 0 20px 45px rgba(22, 33, 27, 0.08);
+	}
+
+	.hero-meter strong {
+		font-size: 2.6rem;
+		line-height: 1;
+		color: #1f6f52;
+	}
+
+	.hero-meter span {
+		color: #5b655e;
+		font-weight: 650;
+	}
+
+	.explainer {
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: 0.8rem;
+		margin-bottom: 1.1rem;
+	}
+
+	.flow-step {
+		display: grid;
+		gap: 0.35rem;
+		padding: 1rem;
+		border: 1px solid rgba(22, 33, 27, 0.1);
+		border-radius: 0.5rem;
+		background: rgba(255, 255, 255, 0.64);
+	}
+
+	.flow-step strong {
+		color: #1d6148;
+		font-size: 0.95rem;
+	}
+
+	.flow-step span {
+		color: #516157;
+		font-size: 0.92rem;
+		line-height: 1.45;
 	}
 
 	.panel {
 		display: grid;
-		gap: 0.75rem;
-		padding: 1rem;
-		border: 1px solid #dbe2ea;
-		border-radius: 0.75rem;
-		background: #f8fafc;
+		gap: 1rem;
+		padding: 1.1rem;
+		border: 1px solid rgba(22, 33, 27, 0.12);
+		border-radius: 0.5rem;
+		background: rgba(255, 255, 255, 0.82);
+		box-shadow: 0 24px 70px rgba(22, 33, 27, 0.1);
+	}
+
+	.panel-header {
+		display: flex;
+		gap: 1rem;
+		align-items: start;
+		justify-content: space-between;
+		padding-bottom: 0.85rem;
+		border-bottom: 1px solid rgba(22, 33, 27, 0.1);
+	}
+
+	.panel-header h2 {
+		font-size: 1.25rem;
+	}
+
+	.panel-header p {
+		margin: 0.35rem 0 0;
+		color: #5c695f;
+		line-height: 1.45;
+	}
+
+	.connection-badge {
+		flex: 0 0 auto;
+		padding: 0.35rem 0.55rem;
+		border: 1px solid rgba(32, 111, 82, 0.24);
+		border-radius: 999px;
+		color: #1f6f52;
+		background: #edf8f1;
+		font-size: 0.75rem;
+		font-weight: 800;
+	}
+
+	.form-grid {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 0.9rem;
+	}
+
+	.field {
+		display: grid;
+		gap: 0.4rem;
+	}
+
+	.field-wide {
+		grid-column: 1 / -1;
 	}
 
 	label {
+		color: #233229;
+		font-size: 0.9rem;
 		font-weight: 600;
 	}
 
@@ -819,26 +1026,59 @@
 		font-size: 1rem;
 	}
 
+	select,
 	input {
 		box-sizing: border-box;
 		width: 100%;
-		padding: 0.5rem 0.6rem;
+		min-height: 2.75rem;
+		padding: 0.55rem 0.7rem;
+		border: 1px solid #cdd9d1;
+		border-radius: 0.45rem;
+		color: #16211b;
+		background: #ffffff;
+	}
+
+	select:focus,
+	input:focus,
+	button:focus-visible {
+		outline: 3px solid rgba(40, 114, 78, 0.18);
+		outline-offset: 2px;
+		border-color: #28724e;
 	}
 
 	.field-help {
-		margin: -0.35rem 0 0;
-		color: #64748b;
+		margin: 0;
+		color: #68766e;
 		font-size: 0.875rem;
+		line-height: 1.4;
 	}
 
 	.actions {
 		display: flex;
-		gap: 0.75rem;
 		flex-wrap: wrap;
+		gap: 0.75rem;
+		padding-top: 0.25rem;
+	}
+
+	.requirements {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem;
+	}
+
+	.requirements span {
+		padding: 0.36rem 0.55rem;
+		border: 1px solid rgba(124, 93, 57, 0.18);
+		border-radius: 999px;
+		color: #67523b;
+		background: #fff7ea;
+		font-size: 0.82rem;
+		font-weight: 650;
 	}
 
 	.preview {
-		border: 1px solid #cbd5e1;
+		overflow: hidden;
+		border: 1px solid #d4ded8;
 		border-radius: 0.5rem;
 		background: #ffffff;
 	}
@@ -846,11 +1086,12 @@
 	.preview summary {
 		cursor: pointer;
 		font-weight: 600;
-		padding: 0.6rem 0.8rem;
+		padding: 0.8rem 0.95rem;
+		background: #f5f8f6;
 	}
 
 	.preview-card {
-		padding: 0 0.8rem 0.8rem 0.8rem;
+		padding: 1rem;
 	}
 
 	.preview-card p {
@@ -862,8 +1103,9 @@
 		width: min(100%, 420px);
 		aspect-ratio: 1 / 1;
 		background: #fff;
-		border: 1px solid #cbd5e1;
+		border: 1px solid #cbd5d8;
 		border-radius: 0.35rem;
+		box-shadow: inset 0 0 0 1px rgba(22, 33, 27, 0.03);
 		overflow: hidden;
 		font-family: Arial, sans-serif;
 	}
@@ -992,10 +1234,16 @@
 	}
 
 	.label-generic {
-		border: 1px dashed #94a3b8;
+		border: 1px dashed #98aca1;
 		border-radius: 0.35rem;
-		padding: 0.8rem;
-		background: #fff;
+		padding: 1rem;
+		background: #fbfdfb;
+		color: #26352c;
+	}
+
+	.label-generic strong {
+		display: block;
+		margin-bottom: 0.25rem;
 	}
 
 	.preview-qr {
@@ -1010,14 +1258,14 @@
 	}
 
 	.preview-error {
-		color: #9f1239;
+		color: #a5363a;
 	}
 
 	.preview-image {
 		display: block;
 		width: min(100%, 420px);
 		height: auto;
-		border: 1px solid #cbd5e1;
+		border: 1px solid #cbd5d8;
 		border-radius: 0.35rem;
 		background: #fff;
 	}
@@ -1027,11 +1275,35 @@
 	}
 
 	button {
+		min-height: 2.65rem;
 		padding: 0.6rem 1rem;
-		border: 1px solid #cbd5e1;
-		border-radius: 0.5rem;
-		background: white;
+		border: 1px solid #23694e;
+		border-radius: 0.45rem;
+		color: #ffffff;
+		background: #23694e;
+		font-weight: 750;
 		cursor: pointer;
+		transition:
+			transform 120ms ease,
+			box-shadow 120ms ease,
+			background-color 120ms ease;
+	}
+
+	button:hover:not(:disabled) {
+		transform: translateY(-1px);
+		background: #1b5a42;
+		box-shadow: 0 10px 24px rgba(35, 105, 78, 0.2);
+	}
+
+	.preview-refresh {
+		border-color: #cdd9d1;
+		color: #24322a;
+		background: #ffffff;
+	}
+
+	.preview-refresh:hover:not(:disabled) {
+		background: #f5f8f6;
+		box-shadow: none;
 	}
 
 	button:disabled {
@@ -1041,6 +1313,41 @@
 
 	.status {
 		margin: 0;
+		padding: 0.85rem 0.95rem;
+		border-left: 4px solid #c8762c;
+		border-radius: 0.4rem;
+		color: #3f362b;
+		background: #fff7ea;
 		font-size: 0.95rem;
+		line-height: 1.45;
+	}
+
+	@media (max-width: 760px) {
+		.page {
+			width: min(100% - 1rem, 72rem);
+			padding-top: 1rem;
+		}
+
+		.hero,
+		.explainer,
+		.form-grid {
+			grid-template-columns: 1fr;
+		}
+
+		.hero {
+			gap: 1rem;
+		}
+
+		.panel-header {
+			display: grid;
+		}
+
+		.actions {
+			display: grid;
+		}
+
+		button {
+			width: 100%;
+		}
 	}
 </style>

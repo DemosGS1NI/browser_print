@@ -8,8 +8,8 @@ export const SIZE_DOTS: Record<PageSize, { pw: number; ll: number }> = {
 };
 
 export const DIGITAL_LINK_QR_URL = 'https://id.2dgs1ni.com/01/07433200758007/11/260530/10/123ABC';
-export const LOBSTER_DIGITAL_LINK_URL =
-	'https://id.gs1.org/01/07434002030018/10/LL-14-25-ART/21/0001?13=250816&15=270816';
+export const GENERIC_CASE_DIGITAL_LINK_URL =
+	'https://id.gs1.org/01/00743999999999/10/LOT-99999/21/9999?13=260101&15=270101';
 
 export function getPageSize(labelSample: LabelSample): PageSize {
 	if (labelSample.startsWith('4x4')) return '4x4';
@@ -47,11 +47,11 @@ export function buildLogisticsLabel4x6(now = Date.now()): string {
 		'^FO30,205^FDPACIFIC RETAIL DC^FS',
 		'^FO30,240^FD950 COMMERCE BLVD, PHOENIX AZ 85043^FS',
 		'^BY3,3,130',
-		'^FO30,310^BCN,130,Y,N,N^FD>;>800012345678901234^FS',
+		'^FO30,310^BCN,130,N,N,N^FD>;>800012345678901234^FS',
 		'^CF0,26',
 		'^FO30,450^FD(00) 00012345678901234 SSCC^FS',
 		'^BY3,3,120',
-		`^FO30,500^BCN,120,Y,N,N^FD>;>801095011015300017${expDate}10LOT123^FS`,
+		`^FO30,500^BCN,120,N,N,N^FD>;>801095011015300017${expDate}10LOT123^FS`,
 		'^CF0,26',
 		'^FO30,635^FD(01) 09501101530003 (17) EXP (10) LOT123^FS',
 		'^FO30,680^FDCarrier: DEMO FREIGHT  Service: GROUND^FS',
@@ -63,14 +63,15 @@ export function buildLogisticsLabel4x6(now = Date.now()): string {
 	].join('');
 }
 
-const LOBSTER_GTIN = '07434002030018';
-const LOBSTER_NET_WEIGHT = '10 lb (4.53 kg)';
-const LOBSTER_PACKED_DATE = '250816';
-const LOBSTER_BEST_BEFORE_DATE = '270816';
-const LOBSTER_SERIAL = '0001';
-const LOBSTER_LOT = 'LL-14-25-ART';
+const GENERIC_CASE_GTIN_DISPLAY = '0743999999999';
+const GENERIC_CASE_GTIN_AI = '00743999999999';
+const GENERIC_CASE_NET_WEIGHT = '0 lb (0.00 kg)';
+const GENERIC_CASE_PACKED_DATE = '260101';
+const GENERIC_CASE_BEST_BEFORE_DATE = '270101';
+const GENERIC_CASE_SERIAL = '9999';
+const GENERIC_CASE_LOT = 'LOT-99999';
 
-function buildLobsterLabelFrame4x4(): string[] {
+function buildGenericCaseLabelFrame4x4(): string[] {
 	return [
 		'^XA',
 		'^CI28',
@@ -81,28 +82,28 @@ function buildLobsterLabelFrame4x4(): string[] {
 		'^LH0,0',
 		'^LT0',
 		'^LS0',
-		'^FO0,34^A0N,44,44^FB812,1,0,C,0^FDLOBSTER TAILS^FS',
-		'^FO35,110^A0N,27,27^FDITEM# 44857^FS',
-		'^FO0,100^A0N,45,45^FB812,1,0,C,0^FDSIZE: 20-UP^FS',
-		'^FO620,110^A0N,27,27^FDPLU# 1488^FS',
-		'^FO0,160^A0N,29,29^FB812,1,0,C,0^FDWILD CAUGHT^FS',
-		'^FO0,202^A0N,28,28^FB812,1,0,C,0^FDPRODUCT OF NICARAGUA^FS',
-		'^FO0,243^A0N,27,27^FB812,1,0,C,0^FDDISTRIBUTED BY: MARK FOODS^FS',
+		'^FO0,34^A0N,44,44^FB812,1,0,C,0^FDProduct Name^FS',
+		'^FO35,110^A0N,27,27^FDITEM# 99999^FS',
+		'^FO0,100^A0N,45,45^FB812,1,0,C,0^FDSIZE: SAMPLE^FS',
+		'^FO620,110^A0N,27,27^FDPLU# 9999^FS',
+		'^FO0,160^A0N,29,29^FB812,1,0,C,0^FDPRODUCT CATEGORY^FS',
+		'^FO0,202^A0N,28,28^FB812,1,0,C,0^FDPRODUCT ORIGIN^FS',
+		'^FO0,243^A0N,27,27^FB812,1,0,C,0^FDDISTRIBUTED BY: DISTRIBUTOR^FS',
 		'^FO30,282^GB752,3,3^FS',
 		'^FO50,307^A0N,25,25^FDGTIN^FS',
-		`^FO50,344^A0N,30,30^FD${LOBSTER_GTIN}^FS`,
+		`^FO50,344^A0N,30,30^FD${GENERIC_CASE_GTIN_DISPLAY}^FS`,
 		'^FO485,307^A0N,25,25^FDNET WEIGHT^FS',
-		`^FO485,344^A0N,30,30^FD${LOBSTER_NET_WEIGHT}^FS`,
+		`^FO485,344^A0N,30,30^FD${GENERIC_CASE_NET_WEIGHT}^FS`,
 		'^FO30,385^GB752,3,3^FS'
 	];
 }
 
 export function buildCaseLabel4x4(_now = Date.now()): string {
-	const gtin = LOBSTER_GTIN;
-	const packedDate = LOBSTER_PACKED_DATE;
-	const bestBeforeDate = LOBSTER_BEST_BEFORE_DATE;
-	const serial = LOBSTER_SERIAL;
-	const lotNumber = LOBSTER_LOT;
+	const gtin = GENERIC_CASE_GTIN_AI;
+	const packedDate = GENERIC_CASE_PACKED_DATE;
+	const bestBeforeDate = GENERIC_CASE_BEST_BEFORE_DATE;
+	const serial = GENERIC_CASE_SERIAL;
+	const lotNumber = GENERIC_CASE_LOT;
 	const barcode1Data = `>;>801${gtin}13${packedDate}15${bestBeforeDate}`;
 	// AI (21) is variable length, so >8 inserts the required FNC1 before AI (10).
 	// Numeric data stays in subset C; the alphanumeric lot switches to subset B.
@@ -123,7 +124,7 @@ export function buildCaseLabel4x4(_now = Date.now()): string {
 	const barcode2X = Math.round((SIZE_DOTS['4x4'].pw - barcode2Modules * moduleWidth) / 2);
 
 	return [
-		...buildLobsterLabelFrame4x4(),
+		...buildGenericCaseLabelFrame4x4(),
 		'^BY2,3,112',
 		`^FO${barcode1X},410^BCN,112,N,N,N^FD${barcode1Data}^FS`,
 		`^FO0,529^A0N,19,19^FB812,1,0,C,0^FD(01)${gtin}(13)${packedDate}(15)${bestBeforeDate}^FS`,
@@ -136,14 +137,14 @@ export function buildCaseLabel4x4(_now = Date.now()): string {
 }
 
 export function buildCaseLabelDataMatrix4x4(): string {
-	const data = `_101${LOBSTER_GTIN}13${LOBSTER_PACKED_DATE}15${LOBSTER_BEST_BEFORE_DATE}21${LOBSTER_SERIAL}_110${LOBSTER_LOT}`;
+	const data = `_101${GENERIC_CASE_GTIN_AI}13${GENERIC_CASE_PACKED_DATE}15${GENERIC_CASE_BEST_BEFORE_DATE}21${GENERIC_CASE_SERIAL}_110${GENERIC_CASE_LOT}`;
 
 	return [
-		...buildLobsterLabelFrame4x4(),
+		...buildGenericCaseLabelFrame4x4(),
 		'^FO276,440^BXN,10,200,26,26,,_^FD',
 		data,
 		'^FS',
-		`^FO0,710^A0N,16,16^FB812,1,0,C,0^FD(01)${LOBSTER_GTIN}(13)${LOBSTER_PACKED_DATE}(15)${LOBSTER_BEST_BEFORE_DATE}(21)${LOBSTER_SERIAL}(10)${LOBSTER_LOT}^FS`,
+		`^FO0,710^A0N,16,16^FB812,1,0,C,0^FD(01)${GENERIC_CASE_GTIN_AI}(13)${GENERIC_CASE_PACKED_DATE}(15)${GENERIC_CASE_BEST_BEFORE_DATE}(21)${GENERIC_CASE_SERIAL}(10)${GENERIC_CASE_LOT}^FS`,
 		'^PQ1,0,1,N',
 		'^XZ'
 	].join('');
@@ -151,10 +152,10 @@ export function buildCaseLabelDataMatrix4x4(): string {
 
 export function buildCaseLabelDigitalLink4x4(): string {
 	return [
-		...buildLobsterLabelFrame4x4(),
+		...buildGenericCaseLabelFrame4x4(),
 		'^FO258,430^BQN,2,8',
-		`^FDLA,${LOBSTER_DIGITAL_LINK_URL}^FS`,
-		`^FO0,735^A0N,16,16^FB812,1,0,C,0^FD(01)${LOBSTER_GTIN}(13)${LOBSTER_PACKED_DATE}(15)${LOBSTER_BEST_BEFORE_DATE}(21)${LOBSTER_SERIAL}(10)${LOBSTER_LOT}^FS`,
+		`^FDLA,${GENERIC_CASE_DIGITAL_LINK_URL}^FS`,
+		`^FO0,735^A0N,16,16^FB812,1,0,C,0^FD(01)${GENERIC_CASE_GTIN_AI}(13)${GENERIC_CASE_PACKED_DATE}(15)${GENERIC_CASE_BEST_BEFORE_DATE}(21)${GENERIC_CASE_SERIAL}(10)${GENERIC_CASE_LOT}^FS`,
 		'^PQ1,0,1,N',
 		'^XZ'
 	].join('');
